@@ -1,0 +1,910 @@
+/* eslint-disable @next/next/no-img-element */
+
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  Match,
+  Participant,
+  Team,
+  TournamentState,
+} from "@/lib/tournament";
+import { isPointsOnlyMatchFormat } from "@/lib/tournament";
+
+interface MobileJoinFormProps {
+  initialState: TournamentState;
+}
+
+const DEVICE_STORAGE_KEY = "torneo-mus-device-id";
+const CAMERA_SAFE_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+const MAX_IMAGE_DIMENSION = 1800;
+
+function createDeviceId(): string {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `device-${Math.random().toString(36).slice(2)}`;
+}
+
+async function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("No se ha podido preparar la imagen."));
+    image.src = url;
+  });
+}
+
+function getScaledDimensions(width: number, height: number): {
+  width: number;
+  height: number;
+} {
+  const longestSide = Math.max(width, height);
+
+  if (longestSide <= MAX_IMAGE_DIMENSION) {
+    return { width, height };
+  }
+
+  const scale = MAX_IMAGE_DIMENSION / longestSide;
+  return {
+    width: Math.round(width * scale),
+    height: Math.round(height * scale),
+  };
+}
+
+async function mirrorSelfieFile(file: File): Promise<File> {
+  if (!file.type.startsWith("image/") || !CAMERA_SAFE_IMAGE_TYPES.has(file.type)) {
+    return file;
+  }
+
+  const sourceUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await loadImage(sourceUrl);
+    const canvas = document.createElement("canvas");
+    const originalWidth = image.naturalWidth || image.width;
+    const originalHeight = image.naturalHeight || image.height;
+    const scaled = getScaledDimensions(originalWidth, originalHeight);
+    canvas.width = scaled.width;
+    canvas.height = scaled.height;
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      return file;
+    }
+
+    context.translate(canvas.width, 0);
+    context.scale(-1, 1);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const mirroredBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, "image/jpeg", 0.9);
+    });
+
+    if (!mirroredBlob) {
+      return file;
+    }
+
+    return new File([mirroredBlob], file.name, {
+      type: "image/jpeg",
+      lastModified: file.lastModified,
+    });
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
+
+function formatStageLabel(stage: TournamentState["stage"]): string {
+  switch (stage) {
+    case "swiss":
+      return "Swiss Stage";
+    case "semifinals":
+      return "Semifinales";
+    case "final":
+      return "Final";
+    case "completed":
+      return "Terminado";
+    case "setup":
+    default:
+      return "Preparación";
+  }
+}
+
+function formatTime(value: string): string {
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return "--:--";
+  }
+
+  return new Intl.DateTimeFormat("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function getParticipantTeam(state: TournamentState, participant: Participant | null): Team | null {
+  if (!participant?.teamId) {
+    return null;
+  }
+
+  return state.teams.find((team) => team.id === participant.teamId) ?? null;
+}
+
+function getTeamMatches(state: TournamentState, teamId: string): Match[] {
+  return state.matches.filter(
+    (match) => match.teamAId === teamId || match.teamBId === teamId,
+  );
+}
+
+function getOpponent(match: Match, team: Team, state: TournamentState): Team | null {
+  const opponentId = match.teamAId === team.id ? match.teamBId : match.teamAId;
+  return opponentId ? state.teams.find((entry) => entry.id === opponentId) ?? null : null;
+}
+
+function getMatchSortValue(match: Match): number {
+  const stageOrder =
+    match.stage === "swiss" ? 0 : match.stage === "semifinal" ? 100 : 200;
+  return stageOrder + match.roundIndex * 10 + match.table;
+}
+
+function getMatchHeading(match: Match): string {
+  if (match.stage === "swiss") {
+    return `Ronda ${match.roundIndex} · ${match.bracketLabel}`;
+  }
+
+  if (match.stage === "semifinal") {
+    return match.bracketLabel;
+  }
+
+  return "Final";
+}
+
+function getPerspectiveScore(
+  match: Match,
+  teamId: string,
+): {
+  own: {
+    vacas: number;
+    games: number;
+    points: number;
+  };
+  opponent: {
+    vacas: number;
+    games: number;
+    points: number;
+  };
+} | null {
+  if (!match.score) {
+    return null;
+  }
+
+  const isTeamA = match.teamAId === teamId;
+  const own = isTeamA ? match.score.teamA : match.score.teamB;
+  const opponent = isTeamA ? match.score.teamB : match.score.teamA;
+
+  return { own, opponent };
+}
+
+function getPerspectiveResultLabel(match: Match, teamId: string): string {
+  if (match.bye) {
+    return "Descanso";
+  }
+
+  if (!match.revealed && match.stage === "swiss") {
+    return "Sin sortear";
+  }
+
+  if (match.status !== "completed") {
+    return "Pendiente";
+  }
+
+  if (match.winnerId === teamId) {
+    return "Victoria";
+  }
+
+  if (match.loserId === teamId) {
+    return "Derrota";
+  }
+
+  return "Cerrado";
+}
+
+export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
+  const [state, setState] = useState(initialState);
+  const [deviceId, setDeviceId] = useState("");
+  const [name, setName] = useState("");
+  const [teamNameInput, setTeamNameInput] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string>("");
+  const [chatInput, setChatInput] = useState("");
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isSavingTeamName, setIsSavingTeamName] = useState(false);
+  const previewObjectUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const existingId = window.localStorage.getItem(DEVICE_STORAGE_KEY);
+    const nextDeviceId = existingId || createDeviceId();
+    if (!existingId) {
+      window.localStorage.setItem(DEVICE_STORAGE_KEY, nextDeviceId);
+    }
+    setDeviceId(nextDeviceId);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      void fetch("/api/tournament", { cache: "no-store" })
+        .then((response) => response.json())
+        .then((payload: TournamentState | { error: string }) => {
+          if (!("error" in payload)) {
+            setState(payload);
+          }
+        })
+        .catch(() => undefined);
+    }, 4000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  const expectedParticipants = state.config.teamCount * 2;
+  const participant = useMemo(
+    () =>
+      deviceId
+        ? state.participants.find((entry) => entry.deviceId === deviceId) ?? null
+        : null,
+    [deviceId, state.participants],
+  );
+  const team = useMemo(
+    () => getParticipantTeam(state, participant),
+    [participant, state],
+  );
+  const teamMatches = useMemo(
+    () => (team ? getTeamMatches(state, team.id) : []),
+    [state, team],
+  );
+  const sortedTeamMatches = useMemo(
+    () =>
+      teamMatches
+        .slice()
+        .sort((left, right) => getMatchSortValue(left) - getMatchSortValue(right)),
+    [teamMatches],
+  );
+  const participantsById = useMemo(
+    () => new Map(state.participants.map((entry) => [entry.id, entry])),
+    [state.participants],
+  );
+  const isTeamCaptain = Boolean(
+    team &&
+      participant &&
+      team.players[0].participantId &&
+      team.players[0].participantId === participant.id,
+  );
+  const canEditTeamName = state.stage === "setup";
+  const teamNeedsCustomName = Boolean(team && !team.nameIsCustom);
+  const teamId = team?.id ?? null;
+  const teamDisplayName = team?.name ?? "";
+  const teamHasCustomName = team?.nameIsCustom ?? false;
+  const completedMatchesCount = sortedTeamMatches.filter(
+    (match) => match.status === "completed" || match.bye,
+  ).length;
+  const pointsOnlyMode = useMemo(
+    () => isPointsOnlyMatchFormat(state.config),
+    [state.config],
+  );
+
+  useEffect(() => {
+    if (!teamId) {
+      setTeamNameInput("");
+      return;
+    }
+
+    setTeamNameInput(teamHasCustomName ? teamDisplayName : "");
+  }, [teamDisplayName, teamHasCustomName, teamId]);
+
+  async function handleFileChange(file: File | null): Promise<void> {
+    if (!file) {
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current);
+        previewObjectUrlRef.current = null;
+      }
+      setSelectedFile(null);
+      setPreviewUrl(null);
+      return;
+    }
+
+    try {
+      const mirroredFile = await mirrorSelfieFile(file);
+      setSelectedFile(mirroredFile);
+
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current);
+      }
+
+      const objectUrl = URL.createObjectURL(mirroredFile);
+      previewObjectUrlRef.current = objectUrl;
+      setPreviewUrl(objectUrl);
+      setFeedback("");
+    } catch {
+      setSelectedFile(file);
+
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current);
+      }
+
+      const fallbackUrl = URL.createObjectURL(file);
+      previewObjectUrlRef.current = fallbackUrl;
+      setPreviewUrl(fallbackUrl);
+      setFeedback("No se ha podido preparar la foto, pero puedes intentar enviarla igualmente.");
+    }
+  }
+
+  async function refreshState(): Promise<void> {
+    const response = await fetch("/api/tournament", { cache: "no-store" });
+    const payload = (await response.json()) as TournamentState | { error: string };
+
+    if (!response.ok || "error" in payload) {
+      throw new Error("error" in payload ? payload.error : "No se ha podido cargar el torneo.");
+    }
+
+    setState(payload);
+  }
+
+  async function handleRegister(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    if (!deviceId) {
+      setFeedback("Todavía se está inicializando este móvil. Espera un segundo.");
+      return;
+    }
+
+    if (!name.trim()) {
+      setFeedback("El nombre es obligatorio.");
+      return;
+    }
+
+    if (!selectedFile) {
+      setFeedback("La foto es obligatoria.");
+      return;
+    }
+
+    setIsRegistering(true);
+    setFeedback("");
+
+    try {
+      const formData = new FormData();
+      formData.set("deviceId", deviceId);
+      formData.set("name", name.trim());
+      formData.set("file", selectedFile);
+
+      const response = await fetch("/api/tournament/register", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json()) as TournamentState | { error: string };
+
+      if (!response.ok || "error" in payload) {
+        throw new Error("error" in payload ? payload.error : "No se ha podido completar el registro.");
+      }
+
+      setState(payload);
+      setSelectedFile(null);
+      setFeedback("Registro completado. Este móvil ya queda asociado a tu ficha.");
+
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current);
+        previewObjectUrlRef.current = null;
+      }
+      setPreviewUrl(null);
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsRegistering(false);
+    }
+  }
+
+  async function handleSendMessage(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    if (!deviceId || !chatInput.trim()) {
+      return;
+    }
+
+    setIsSendingMessage(true);
+
+    try {
+      const response = await fetch("/api/tournament", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "postChatMessage",
+          payload: {
+            deviceId,
+            text: chatInput.trim(),
+          },
+        }),
+      });
+      const payload = (await response.json()) as TournamentState | { error: string };
+
+      if (!response.ok || "error" in payload) {
+        throw new Error("error" in payload ? payload.error : "No se ha podido mandar el mensaje.");
+      }
+
+      setState(payload);
+      setChatInput("");
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsSendingMessage(false);
+    }
+  }
+
+  async function handleSaveTeamName(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    if (!team || !deviceId || !isTeamCaptain) {
+      return;
+    }
+
+    if (!teamNameInput.trim()) {
+      setFeedback("El nombre del equipo es obligatorio.");
+      return;
+    }
+
+    setIsSavingTeamName(true);
+
+    try {
+      const response = await fetch("/api/tournament", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "setTeamCustomName",
+          payload: {
+            deviceId,
+            teamId: team.id,
+            name: teamNameInput.trim(),
+          },
+        }),
+      });
+      const payload = (await response.json()) as TournamentState | { error: string };
+
+      if (!response.ok || "error" in payload) {
+        throw new Error("error" in payload ? payload.error : "No se ha podido guardar el nombre del equipo.");
+      }
+
+      setState(payload);
+      setFeedback(
+        team.nameIsCustom
+          ? "Nombre del equipo actualizado."
+          : "Nombre del equipo guardado.",
+      );
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsSavingTeamName(false);
+    }
+  }
+
+  return (
+    <main className="relative min-h-screen overflow-hidden bg-[#04070d] text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_28%),radial-gradient(circle_at_82%_14%,_rgba(37,99,235,0.14),_transparent_26%),linear-gradient(180deg,#060a12_0%,#09111d_52%,#05080f_100%)]" />
+      <div className="relative mx-auto flex min-h-screen w-full max-w-xl flex-col px-4 py-8">
+        <section className="overflow-hidden rounded-[34px] border border-white/10 bg-white/[0.04] shadow-[0_40px_120px_rgba(0,0,0,0.24)] backdrop-blur">
+          <div className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.24),_transparent_50%),linear-gradient(135deg,#07111f,#102440_55%,#123251)] px-6 py-7 text-white">
+            {participant ? (
+              <div className="mb-5 flex items-center gap-4">
+                <div className="h-20 w-20 overflow-hidden rounded-full border border-white/12 bg-[#11253d] shadow-[0_12px_30px_rgba(0,0,0,0.24)]">
+                  <img
+                    src={participant.photoUrl}
+                    alt={participant.name}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                  {formatStageLabel(state.stage)}
+                </span>
+              </div>
+            ) : null}
+
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-[#b8dfff]">
+              {state.config.title}
+            </p>
+            <h1 className="mt-3 text-3xl font-semibold leading-tight">
+              {participant ? `Hola, ${participant.name}` : "Entra en el torneo"}
+            </h1>
+            <p className="mt-3 max-w-md text-sm leading-6 text-white/72">
+              {participant
+                ? "Este móvil ya está identificado. Aquí verás tu pareja, cómo va el torneo y el chat interno."
+                : "Rellena tu nombre y súbete una foto. Quedará asociado a este móvil para reconocerte cada vez que vuelvas."}
+            </p>
+          </div>
+
+          <div className="space-y-6 px-6 py-7">
+            {!participant ? (
+              <>
+                <div className="rounded-[22px] border border-white/10 bg-[#0b1320] p-4">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                    Registro en directo
+                  </p>
+                  <p className="mt-3 text-sm leading-6 text-white/72">
+                    Registradas {state.participants.length} de {expectedParticipants} personas.
+                  </p>
+                </div>
+
+                {state.participants.length >= expectedParticipants ? (
+                  <div className="rounded-[22px] border border-amber-400/20 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
+                    El cupo de jugadores ya está completo para este torneo. Si este móvil ya
+                    participaba, vuelve a abrir el QR desde el mismo navegador.
+                  </div>
+                ) : (
+                  <form className="space-y-5" onSubmit={(event) => void handleRegister(event)}>
+                    <label className="block">
+                      <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#b8dfff]">
+                        Nombre
+                      </span>
+                      <input
+                        value={name}
+                        onChange={(event) => setName(event.target.value)}
+                        placeholder="Escribe tu nombre"
+                        className="input-shell mt-2 text-base !bg-[#101b2d] !text-white placeholder:!text-white/40"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#b8dfff]">
+                        Foto obligatoria
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        capture="user"
+                        onChange={(event) =>
+                          void handleFileChange(event.target.files?.[0] ?? null)
+                        }
+                        className="mt-2 block w-full rounded-[20px] border border-white/10 bg-[#0b1320] px-4 py-3 text-sm text-white/72 file:mr-4 file:rounded-full file:border-0 file:bg-[#4a67ff] file:px-4 file:py-2 file:text-xs file:font-semibold file:uppercase file:tracking-[0.16em] file:text-white"
+                      />
+                    </label>
+
+                    <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#0b1320]">
+                      <div className="flex min-h-72 items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.18),_transparent_46%),linear-gradient(180deg,#0c1628,#101e34)]">
+                        {previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt="Previsualización de la foto"
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="px-10 text-center text-sm leading-6 text-white/48">
+                            Cuando elijas una imagen la verás aquí antes de enviar el alta.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isRegistering || state.participants.length >= expectedParticipants}
+                      className="button-primary w-full"
+                    >
+                      {isRegistering ? "Guardando ficha..." : "Participar"}
+                    </button>
+                  </form>
+                )}
+              </>
+            ) : (
+              <>
+                {team ? (
+                  <div className="space-y-4">
+                    {canEditTeamName && isTeamCaptain ? (
+                      <section className="rounded-[26px] border border-[#315d8d] bg-[linear-gradient(180deg,rgba(25,44,72,0.9),rgba(10,18,31,0.96))] p-5">
+                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                          Nombre del equipo
+                        </p>
+                        <h2 className="mt-2 text-2xl font-semibold text-white">
+                          {teamNeedsCustomName
+                            ? "Decidid ahora un nombre corto"
+                            : "Puedes cambiar el nombre del equipo"}
+                        </h2>
+                        <p className="mt-3 text-sm leading-6 text-white/72">
+                          {teamNeedsCustomName
+                            ? "Es obligatorio poner un nombre corto para que la mesa no tenga que mostrar siempre los dos nombres completos."
+                            : "Si queréis, podéis renombrar el equipo desde este móvil porque corresponde a la plaza A."}
+                        </p>
+
+                        <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={(event) => void handleSaveTeamName(event)}>
+                          <input
+                            value={teamNameInput}
+                            onChange={(event) => setTeamNameInput(event.target.value)}
+                            placeholder="Nombre del equipo"
+                            className="input-shell !bg-[#101b2d] !text-white placeholder:!text-white/40"
+                          />
+                          <button
+                            type="submit"
+                            disabled={isSavingTeamName || !teamNameInput.trim()}
+                            className="button-primary"
+                          >
+                            {isSavingTeamName ? "Guardando" : teamNeedsCustomName ? "Guardar nombre" : "Actualizar nombre"}
+                          </button>
+                        </form>
+                      </section>
+                    ) : canEditTeamName && teamNeedsCustomName ? (
+                      <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
+                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                          Nombre pendiente
+                        </p>
+                        <p className="mt-3 text-sm leading-6 text-white/72">
+                          El nombre del equipo tiene que decidirlo tu compañero desde el móvil de la plaza A. En cuanto lo guarde, aquí dejarás de ver el nombre provisional largo.
+                        </p>
+                      </section>
+                    ) : null}
+
+                    <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                            Tu equipo
+                          </p>
+                          <h2 className="mt-2 text-2xl font-semibold text-white">
+                            {team.name}
+                          </h2>
+                        </div>
+                        <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                          {formatStageLabel(state.stage)}
+                        </span>
+                      </div>
+
+                      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                        {team.players.map((player) => (
+                          <div
+                            key={`${team.id}-${player.slot}`}
+                            className="rounded-[20px] border border-white/10 bg-white/[0.03] p-3"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="h-16 w-16 overflow-hidden rounded-full border border-white/12 bg-[#11253d]">
+                                {player.photoUrl ? (
+                                  <img
+                                    src={player.photoUrl}
+                                    alt={player.name}
+                                    className="h-full w-full object-cover"
+                                  />
+                                ) : null}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-white">{player.name}</p>
+                                <p className="text-sm text-white/48">Plaza {player.slot}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-[18px] border border-white/10 bg-white/[0.04] px-4 py-3">
+                          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/42">
+                            Balance
+                          </p>
+                          <p className="mt-2 text-base font-semibold text-white">
+                            {team.wins}-{team.losses}
+                          </p>
+                        </div>
+                        <div className="rounded-[18px] border border-white/10 bg-white/[0.04] px-4 py-3">
+                          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/42">
+                            Partidas cerradas
+                          </p>
+                          <p className="mt-2 text-base font-semibold text-white">
+                            {completedMatchesCount}/{sortedTeamMatches.length}
+                          </p>
+                        </div>
+                      </div>
+                    </section>
+
+                    {sortedTeamMatches.length > 0 ? (
+                      <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                              Recorrido
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-white/68">
+                              Las mesas aparecen en orden real del torneo y el marcador se muestra
+                              siempre desde la perspectiva de vuestro equipo.
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                            {completedMatchesCount}/{sortedTeamMatches.length}
+                          </span>
+                        </div>
+
+                        <div className="mt-5 space-y-3">
+                          {sortedTeamMatches.map((match) => {
+                            const opponent = getOpponent(match, team, state);
+                            const hiddenCurrentSwissMatch =
+                              match.stage === "swiss" &&
+                              match.roundIndex === state.currentSwissRound &&
+                              !match.revealed;
+                            const perspectiveScore = getPerspectiveScore(match, team.id);
+                            const resultLabel = getPerspectiveResultLabel(match, team.id);
+
+                            return (
+                              <div
+                                key={match.id}
+                                className="rounded-[18px] border border-white/10 bg-white/[0.03] px-4 py-4"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <p className="text-sm font-semibold text-white">
+                                    {hiddenCurrentSwissMatch
+                                      ? "Ronda actual · pendiente de sorteo"
+                                      : getMatchHeading(match)}
+                                  </p>
+                                  <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[#b8dfff]">
+                                    {resultLabel}
+                                  </span>
+                                </div>
+
+                                <p className="mt-2 text-sm leading-6 text-white/72">
+                                  {match.bye
+                                    ? "Descanso automático para esta ronda."
+                                    : hiddenCurrentSwissMatch
+                                      ? "Tu rival todavía no se muestra porque la mesa no ha sorteado este tramo."
+                                      : opponent
+                                        ? `Contra ${opponent.name}.`
+                                        : "Rival por confirmar."}
+                                </p>
+
+                                {perspectiveScore ? (
+                                  pointsOnlyMode ? (
+                                    <div className="mt-3 rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
+                                      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                        Puntos
+                                      </p>
+                                      <p className="mt-1 text-sm font-semibold text-white">
+                                        {perspectiveScore.own.points}-{perspectiveScore.opponent.points}
+                                      </p>
+                                    </div>
+                                  ) : (
+                                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                      <div className="rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
+                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                          Vacas
+                                        </p>
+                                        <p className="mt-1 text-sm font-semibold text-white">
+                                          {perspectiveScore.own.vacas}-{perspectiveScore.opponent.vacas}
+                                        </p>
+                                      </div>
+                                      <div className="rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
+                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                          Juegos
+                                        </p>
+                                        <p className="mt-1 text-sm font-semibold text-white">
+                                          {perspectiveScore.own.games}-{perspectiveScore.opponent.games}
+                                        </p>
+                                      </div>
+                                      <div className="rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
+                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                          Puntos
+                                        </p>
+                                        <p className="mt-1 text-sm font-semibold text-white">
+                                          {perspectiveScore.own.points}-{perspectiveScore.opponent.points}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5 text-sm leading-6 text-white/72">
+                    Tu ficha ya está dentro. Ahora la mesa está formando las parejas; cuando te asignen una,
+                    esta pantalla mostrará tu equipo y su estado.
+                  </div>
+                )}
+
+                <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                        Chat del torneo
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-white/68">
+                        Habla con el resto de móviles que estén jugando este torneo.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void refreshState()}
+                      className="button-secondary"
+                    >
+                      Recargar
+                    </button>
+                  </div>
+
+                  <div className="mt-4 h-[24rem] space-y-3 overflow-y-auto rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
+                    {state.chatMessages.length > 0 ? (
+                      state.chatMessages.map((message) => {
+                        const author = participantsById.get(message.participantId);
+                        const isOwn = author?.id === participant.id;
+
+                        return (
+                          <div
+                            key={message.id}
+                            className={`rounded-[18px] px-4 py-3 ${
+                              isOwn
+                                ? "ml-8 border border-[#4a67ff]/30 bg-[#203360]"
+                                : "mr-8 border border-white/10 bg-[#0d1727]"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-sm font-semibold text-white">
+                                {author?.name ?? "Jugador"}
+                              </p>
+                              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/48">
+                                {formatTime(message.createdAt)}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-white/78">
+                              {message.text}
+                            </p>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-sm leading-6 text-white/48">
+                        Todavía no hay mensajes en el chat.
+                      </div>
+                    )}
+                  </div>
+
+                  <form className="mt-4 flex gap-3" onSubmit={(event) => void handleSendMessage(event)}>
+                    <input
+                      value={chatInput}
+                      onChange={(event) => setChatInput(event.target.value)}
+                      placeholder="Escribe al resto de jugadores"
+                      className="input-shell !bg-[#101b2d] !text-white placeholder:!text-white/40"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isSendingMessage || !chatInput.trim()}
+                      className="button-primary"
+                    >
+                      {isSendingMessage ? "Enviando" : "Enviar"}
+                    </button>
+                  </form>
+                </section>
+              </>
+            )}
+
+            {feedback ? (
+              <div className="rounded-[18px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-white/82">
+                {feedback}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
