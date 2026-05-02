@@ -56,30 +56,30 @@ Esto funciona mejor para un suizo porque deja claro qué grupos siguen vivos en 
 
 - Estado del torneo: `data/tournament.json`
 - Fotos subidas: `data/uploads/`
-- En Docker esos datos viven en un volumen persistente.
 
 ## Desarrollo local
 
-First, run the development server:
+Arranca siempre el servidor de desarrollo para trabajar con refresco automático:
 
 ```bash
 npm run dev
 ```
 
-Abre [http://localhost:3000](http://localhost:3000).
+Abre [http://localhost:3000](http://localhost:3000). Este modo usa Fast Refresh de Next/Turbopack: al modificar componentes, estilos o rutas, el navegador actualiza la vista sin tumbar la app.
 
-## Producción con Docker
+Si solo quieres exponerla en tu propia máquina, puedes usar:
 
 ```bash
-docker compose up --build
+npm run dev:local
 ```
 
-La aplicación quedará expuesta en `http://localhost:3000` y persistirá los datos en el volumen `mus_swiss_data`.
+`npm run start` queda reservado para revisar una build de producción y no tiene refresco automático.
 
-## Cómo exponerla a internet
+## Cómo exponerla a móviles o internet
 
 La app está pensada para ejecutarse en tu ordenador y publicarse hacia fuera con una de estas dos estrategias:
 
+- acceso desde móviles en la misma red usando la IP local de tu ordenador
 - un reverse proxy con HTTPS delante del puerto `3000`
 - un túnel HTTPS hacia tu máquina
 

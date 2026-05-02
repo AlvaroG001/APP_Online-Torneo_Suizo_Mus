@@ -5,7 +5,9 @@ import {
   advanceTournament,
   assignParticipantToTeamSlot,
   buildTournament,
+  confirmManualTeam,
   createRandomTeams,
+  deleteBotParticipantDuringSetup,
   postChatMessage,
   prepareManualTeams,
   renameParticipantDuringSetup,
@@ -60,10 +62,22 @@ export async function POST(request: Request) {
           body.payload as Parameters<typeof renameParticipantDuringSetup>[1],
         );
         break;
+      case "deleteBotParticipantDuringSetup":
+        nextState = deleteBotParticipantDuringSetup(
+          current,
+          body.payload as Parameters<typeof deleteBotParticipantDuringSetup>[1],
+        );
+        break;
       case "assignParticipantToTeamSlot":
         nextState = assignParticipantToTeamSlot(
           current,
           body.payload as Parameters<typeof assignParticipantToTeamSlot>[1],
+        );
+        break;
+      case "confirmManualTeam":
+        nextState = confirmManualTeam(
+          current,
+          body.payload as Parameters<typeof confirmManualTeam>[1],
         );
         break;
       case "postChatMessage":

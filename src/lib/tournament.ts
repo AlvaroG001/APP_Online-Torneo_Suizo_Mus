@@ -59,6 +59,7 @@ export interface Team {
   label: string;
   name: string;
   nameIsCustom: boolean;
+  confirmed: boolean;
   players: [PlayerProfile, PlayerProfile];
   wins: number;
   losses: number;
@@ -158,6 +159,10 @@ export interface TeamSlotAssignmentInput {
   participantId: string | null;
 }
 
+export interface TeamConfirmationInput {
+  teamId: string;
+}
+
 export interface ChatMessageInput {
   deviceId: string;
   text: string;
@@ -172,6 +177,10 @@ export interface TeamNameUpdateInput {
 export interface ParticipantNameUpdateInput {
   participantId: string;
   name: string;
+}
+
+export interface ParticipantDeleteInput {
+  participantId: string;
 }
 
 export function isPointsOnlyMatchFormat(config: TournamentConfig): boolean {
@@ -222,6 +231,7 @@ function createTeam(seed: number): Team {
     label: `Equipo ${seed}`,
     name: `Equipo ${seed}`,
     nameIsCustom: false,
+    confirmed: false,
     players: [createPlayer("A"), createPlayer("B")],
     wins: 0,
     losses: 0,
@@ -260,6 +270,14 @@ function refreshTeamName(
   }
 
   team.name = getAutoTeamName(team);
+}
+
+function isTeamConfirmedForMode(team: Team, mode: TeamCreationMode): boolean {
+  if (typeof team.confirmed === "boolean") {
+    return team.confirmed;
+  }
+
+  return mode !== "manual" || isTeamComplete(team);
 }
 
 function buildBotAvatar(name: string, index: number): string {
@@ -617,6 +635,7 @@ function cloneState(state: TournamentState): TournamentState {
     teams: state.teams.map((team) => ({
       ...team,
       nameIsCustom: Boolean(team.nameIsCustom),
+      confirmed: isTeamConfirmedForMode(team, state.teamCreationMode),
       players: clonePlayers(team.players),
       opponents: [...team.opponents],
     })),
@@ -646,6 +665,7 @@ function syncParticipantsAndTeams(cloned: TournamentState): {
   const teams = cloned.teams.map((team) => ({
     ...team,
     nameIsCustom: Boolean(team.nameIsCustom),
+    confirmed: isTeamConfirmedForMode(team, cloned.teamCreationMode),
     players: clonePlayers(team.players),
   }));
 
@@ -664,7 +684,9 @@ function syncParticipantsAndTeams(cloned: TournamentState): {
         continue;
       }
 
-      participant.teamId = team.id;
+      if (team.confirmed) {
+        participant.teamId = team.id;
+      }
       player.id = participant.id;
       player.deviceId = participant.deviceId;
       player.name = participant.name;
@@ -1049,6 +1071,51 @@ export function renameParticipantDuringSetup(
   return refreshTournamentState(cloned);
 }
 
+export function deleteBotParticipantDuringSetup(
+  state: TournamentState,
+  input: ParticipantDeleteInput,
+): TournamentState {
+  if (state.stage !== "setup") {
+    throw new Error("Los bots solo se pueden eliminar durante la preparación.");
+  }
+
+  const cloned = cloneState(state);
+  const participantIndex = cloned.participants.findIndex(
+    (entry) => entry.id === input.participantId,
+  );
+  const participant = cloned.participants[participantIndex];
+
+  if (!participant) {
+    throw new Error("No se ha encontrado la persona indicada.");
+  }
+
+  if (!participant.deviceId.startsWith("bot-")) {
+    throw new Error("Solo se pueden eliminar bots de prueba.");
+  }
+
+  cloned.participants.splice(participantIndex, 1);
+
+  for (const team of cloned.teams) {
+    let changed = false;
+    team.players = team.players.map((player) => {
+      if (player.participantId === participant.id) {
+        changed = true;
+        return createPlayer(player.slot);
+      }
+
+      return player;
+    }) as [PlayerProfile, PlayerProfile];
+
+    if (changed) {
+      team.nameIsCustom = false;
+      team.confirmed = false;
+      refreshTeamName(team, { forceAuto: true });
+    }
+  }
+
+  return refreshTournamentState(cloned);
+}
+
 export function createRandomTeams(state: TournamentState): TournamentState {
   if (state.stage !== "setup") {
     throw new Error("Las parejas solo se pueden crear antes de arrancar el torneo.");
@@ -1067,6 +1134,7 @@ export function createRandomTeams(state: TournamentState): TournamentState {
       participantToPlayer(participantA, "A"),
       participantToPlayer(participantB, "B"),
     ];
+    team.confirmed = true;
     refreshTeamName(team);
     return team;
   });
@@ -1132,6 +1200,7 @@ export function assignParticipantToTeamSlot(
     team.players = team.players.map((player) => {
       if (participant && player.participantId === participant.id) {
         team.nameIsCustom = false;
+        team.confirmed = false;
         return createPlayer(player.slot);
       }
       return player;
@@ -1141,9 +1210,35 @@ export function assignParticipantToTeamSlot(
 
   const playerIndex = input.slot === "A" ? 0 : 1;
   targetTeam.nameIsCustom = false;
+  targetTeam.confirmed = false;
   targetTeam.players[playerIndex] = participant
     ? participantToPlayer(participant, input.slot)
     : createPlayer(input.slot);
+  refreshTeamName(targetTeam, { forceAuto: true });
+
+  return refreshTournamentState(cloned);
+}
+
+export function confirmManualTeam(
+  state: TournamentState,
+  input: TeamConfirmationInput,
+): TournamentState {
+  if (state.teamCreationMode !== "manual") {
+    throw new Error("Solo puedes confirmar parejas en modo manual.");
+  }
+
+  const cloned = cloneState(state);
+  const targetTeam = cloned.teams.find((team) => team.id === input.teamId);
+
+  if (!targetTeam) {
+    throw new Error("No se ha encontrado la pareja indicada.");
+  }
+
+  if (!isTeamComplete(targetTeam)) {
+    throw new Error("Asigna primero Integrante A e Integrante B.");
+  }
+
+  targetTeam.confirmed = true;
   refreshTeamName(targetTeam, { forceAuto: true });
 
   return refreshTournamentState(cloned);
@@ -1156,6 +1251,10 @@ function ensureTeamsReadyForSwiss(state: TournamentState): void {
 
   if (state.teams.some((team) => !isTeamComplete(team))) {
     throw new Error("Todas las parejas deben tener dos personas con nombre y foto.");
+  }
+
+  if (state.teams.some((team) => !team.confirmed)) {
+    throw new Error("Confirma todas las parejas antes de empezar el torneo.");
   }
 }
 
@@ -1214,9 +1313,13 @@ function createSwissPairings(
 ): Match[] {
   const ranked = getRankedTeams(state);
   const swissHistory = buildOpponentsHistory(getSwissMatches(state.matches));
+  const byeTeam = ranked.length % 2 === 1 ? selectSwissByeTeam(ranked) : null;
+  const pairableTeams = byeTeam
+    ? ranked.filter((team) => team.id !== byeTeam.id)
+    : ranked;
 
   if (roundIndex === 1) {
-    const shuffled = shuffleItems(ranked);
+    const shuffled = shuffleItems(pairableTeams);
     const matches: Match[] = [];
     let table = 1;
 
@@ -1228,21 +1331,19 @@ function createSwissPairings(
         continue;
       }
 
-      if (!teamB) {
-        matches.push(buildByeMatch("swiss", roundIndex, table, teamA.id, "0-0"));
-        table += 1;
-        continue;
-      }
-
       matches.push(buildMatch("swiss", roundIndex, table, teamA.id, teamB.id, "0-0"));
       table += 1;
+    }
+
+    if (byeTeam) {
+      matches.push(buildByeMatch("swiss", roundIndex, table, byeTeam.id, "BYE"));
     }
 
     return matches;
   }
 
   const groups = new Map<string, Team[]>();
-  for (const team of ranked) {
+  for (const team of pairableTeams) {
     const record = `${team.wins}-${team.losses}`;
     if (!groups.has(record)) {
       groups.set(record, []);
@@ -1309,11 +1410,44 @@ function createSwissPairings(
   }
 
   if (carryTeam) {
-    const record = `${carryTeam.wins}-${carryTeam.losses}`;
-    matches.push(buildByeMatch("swiss", roundIndex, table, carryTeam.id, record));
+    const fallbackPool = [...matches]
+      .flatMap((match) => [match.teamAId, match.teamBId])
+      .filter(Boolean) as string[];
+    const swapTarget = fallbackPool
+      .map((teamId) => pairableTeams.find((team) => team.id === teamId))
+      .find((team): team is Team => team !== undefined && team.byeCount === 0);
+
+    if (swapTarget && carryTeam.byeCount > 0) {
+      const match = matches.find(
+        (entry) => entry.teamAId === swapTarget.id || entry.teamBId === swapTarget.id,
+      );
+
+      if (match) {
+        if (match.teamAId === swapTarget.id) {
+          match.teamAId = carryTeam.id;
+        } else {
+          match.teamBId = carryTeam.id;
+        }
+        const record = `${swapTarget.wins}-${swapTarget.losses}`;
+        matches.push(buildByeMatch("swiss", roundIndex, table, swapTarget.id, record));
+      }
+    } else {
+      const record = `${carryTeam.wins}-${carryTeam.losses}`;
+      matches.push(buildByeMatch("swiss", roundIndex, table, carryTeam.id, record));
+    }
+  } else if (byeTeam) {
+    const record = `${byeTeam.wins}-${byeTeam.losses}`;
+    matches.push(buildByeMatch("swiss", roundIndex, table, byeTeam.id, record));
   }
 
   return matches;
+}
+
+function selectSwissByeTeam(teams: Team[]): Team {
+  const candidates = teams.filter((team) => team.byeCount === 0);
+  const pool = candidates.length > 0 ? candidates : teams;
+
+  return [...pool].sort((left, right) => -standingsComparator(left, right))[0];
 }
 
 export function startTournament(state: TournamentState): TournamentState {

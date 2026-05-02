@@ -3,6 +3,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { InfoHint } from "@/components/info-hint";
 import type {
   Match,
   Participant,
@@ -296,6 +297,10 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
       team.players[0].participantId &&
       team.players[0].participantId === participant.id,
   );
+  const participantSlot =
+    team && participant
+      ? team.players.find((player) => player.participantId === participant.id)?.slot ?? null
+      : null;
   const canEditTeamName = state.stage === "setup";
   const teamNeedsCustomName = Boolean(team && !team.nameIsCustom);
   const teamId = team?.id ?? null;
@@ -506,73 +511,74 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#04070d] text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_28%),radial-gradient(circle_at_82%_14%,_rgba(37,99,235,0.14),_transparent_26%),linear-gradient(180deg,#060a12_0%,#09111d_52%,#05080f_100%)]" />
+    <main className="relative min-h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.055)_0%,transparent_34%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
       <div className="relative mx-auto flex min-h-screen w-full max-w-xl flex-col px-4 py-8">
-        <section className="overflow-hidden rounded-[34px] border border-white/10 bg-white/[0.04] shadow-[0_40px_120px_rgba(0,0,0,0.24)] backdrop-blur">
-          <div className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.24),_transparent_50%),linear-gradient(135deg,#07111f,#102440_55%,#123251)] px-6 py-7 text-white">
+        <section className="overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] shadow-[0_40px_120px_rgba(0,0,0,0.24)]">
+          <div className="border-b border-[var(--stroke)] bg-[linear-gradient(135deg,rgba(124,255,79,0.13),rgba(18,24,19,0.98)_44%,#0b100c)] px-6 py-7 text-[var(--foreground)]">
             {participant ? (
               <div className="mb-5 flex items-center gap-4">
-                <div className="h-20 w-20 overflow-hidden rounded-full border border-white/12 bg-[#11253d] shadow-[0_12px_30px_rgba(0,0,0,0.24)]">
+                <div className="h-20 w-20 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)] shadow-[0_12px_30px_rgba(0,0,0,0.24)]">
                   <img
                     src={participant.photoUrl}
                     alt={participant.name}
                     className="h-full w-full object-cover"
                   />
                 </div>
-                <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
                   {formatStageLabel(state.stage)}
                 </span>
               </div>
             ) : null}
 
-            <p className="font-mono text-xs uppercase tracking-[0.24em] text-[#b8dfff]">
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--accent)]">
               {state.config.title}
             </p>
             <h1 className="mt-3 text-3xl font-semibold leading-tight">
               {participant ? `Hola, ${participant.name}` : "Entra en el torneo"}
             </h1>
-            <p className="mt-3 max-w-md text-sm leading-6 text-white/72">
-              {participant
-                ? "Este móvil ya está identificado. Aquí verás tu pareja, cómo va el torneo y el chat interno."
-                : "Rellena tu nombre y súbete una foto. Quedará asociado a este móvil para reconocerte cada vez que vuelvas."}
-            </p>
+            {participantSlot ? (
+              <p className="mt-2 font-mono text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                Integrante {participantSlot}
+              </p>
+            ) : null}
           </div>
 
           <div className="space-y-6 px-6 py-7">
             {!participant ? (
               <>
-                <div className="rounded-[22px] border border-white/10 bg-[#0b1320] p-4">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                     Registro en directo
                   </p>
-                  <p className="mt-3 text-sm leading-6 text-white/72">
+                  <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
                     Registradas {state.participants.length} de {expectedParticipants} personas.
                   </p>
                 </div>
 
                 {state.participants.length >= expectedParticipants ? (
-                  <div className="rounded-[22px] border border-amber-400/20 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
+                  <div className="rounded-[8px] border border-amber-400/20 bg-amber-400/10 p-4 text-sm leading-6 text-amber-100">
                     El cupo de jugadores ya está completo para este torneo. Si este móvil ya
                     participaba, vuelve a abrir el QR desde el mismo navegador.
                   </div>
                 ) : (
                   <form className="space-y-5" onSubmit={(event) => void handleRegister(event)}>
                     <label className="block">
-                      <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#b8dfff]">
+                      <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                         Nombre
                       </span>
                       <input
                         value={name}
                         onChange={(event) => setName(event.target.value)}
                         placeholder="Escribe tu nombre"
-                        className="input-shell mt-2 text-base !bg-[#101b2d] !text-white placeholder:!text-white/40"
+                        className="input-shell mt-2 text-base !bg-[var(--surface-inset)] !text-[var(--foreground)] placeholder:!text-[var(--muted-soft)]"
                       />
                     </label>
 
-                    <label className="block">
-                      <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#b8dfff]">
+                    <div className="block">
+                      <span className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                         Foto obligatoria
+                        <InfoHint label="Usa la cámara o elige una imagen. La foto sirve para reconocer a cada jugador durante el torneo." />
                       </span>
                       <input
                         type="file"
@@ -581,12 +587,12 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                         onChange={(event) =>
                           void handleFileChange(event.target.files?.[0] ?? null)
                         }
-                        className="mt-2 block w-full rounded-[20px] border border-white/10 bg-[#0b1320] px-4 py-3 text-sm text-white/72 file:mr-4 file:rounded-full file:border-0 file:bg-[#4a67ff] file:px-4 file:py-2 file:text-xs file:font-semibold file:uppercase file:tracking-[0.16em] file:text-white"
+                        className="mt-2 block w-full rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3 text-sm text-[var(--muted)] file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent)] file:px-4 file:py-2 file:text-xs file:font-semibold file:uppercase file:tracking-[0.16em] file:text-[var(--accent-ink)]"
                       />
-                    </label>
+                    </div>
 
-                    <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#0b1320]">
-                      <div className="flex min-h-72 items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.18),_transparent_46%),linear-gradient(180deg,#0c1628,#101e34)]">
+                    <div className="overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)]">
+                      <div className="flex min-h-72 items-center justify-center bg-[linear-gradient(180deg,rgba(124,255,79,0.08),#050806)]">
                         {previewUrl ? (
                           <img
                             src={previewUrl}
@@ -594,8 +600,8 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                             className="h-full w-full object-cover"
                           />
                         ) : (
-                          <div className="px-10 text-center text-sm leading-6 text-white/48">
-                            Cuando elijas una imagen la verás aquí antes de enviar el alta.
+                          <div className="px-10 text-center text-sm leading-6 text-[var(--muted-soft)]">
+                            Sin foto
                           </div>
                         )}
                       </div>
@@ -616,27 +622,25 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                 {team ? (
                   <div className="space-y-4">
                     {canEditTeamName && isTeamCaptain ? (
-                      <section className="rounded-[26px] border border-[#315d8d] bg-[linear-gradient(180deg,rgba(25,44,72,0.9),rgba(10,18,31,0.96))] p-5">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-                          Nombre del equipo
-                        </p>
-                        <h2 className="mt-2 text-2xl font-semibold text-white">
+                      <section className="rounded-[8px] border border-[var(--accent-border)] bg-[linear-gradient(180deg,rgba(124,255,79,0.10),rgba(18,24,19,0.98))] p-5">
+                        <div className="flex items-center gap-2">
+                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                            Nombre del equipo
+                          </p>
+                          <InfoHint label="Pon un nombre corto para que la mesa no tenga que mostrar siempre los dos nombres completos." />
+                        </div>
+                        <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
                           {teamNeedsCustomName
                             ? "Decidid ahora un nombre corto"
                             : "Puedes cambiar el nombre del equipo"}
                         </h2>
-                        <p className="mt-3 text-sm leading-6 text-white/72">
-                          {teamNeedsCustomName
-                            ? "Es obligatorio poner un nombre corto para que la mesa no tenga que mostrar siempre los dos nombres completos."
-                            : "Si queréis, podéis renombrar el equipo desde este móvil porque corresponde a la plaza A."}
-                        </p>
 
                         <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={(event) => void handleSaveTeamName(event)}>
                           <input
                             value={teamNameInput}
                             onChange={(event) => setTeamNameInput(event.target.value)}
                             placeholder="Nombre del equipo"
-                            className="input-shell !bg-[#101b2d] !text-white placeholder:!text-white/40"
+                            className="input-shell !bg-[var(--surface-inset)] !text-[var(--foreground)] placeholder:!text-[var(--muted-soft)]"
                           />
                           <button
                             type="submit"
@@ -648,27 +652,27 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                         </form>
                       </section>
                     ) : canEditTeamName && teamNeedsCustomName ? (
-                      <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                      <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
+                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                           Nombre pendiente
                         </p>
-                        <p className="mt-3 text-sm leading-6 text-white/72">
+                        <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
                           El nombre del equipo tiene que decidirlo tu compañero desde el móvil de la plaza A. En cuanto lo guarde, aquí dejarás de ver el nombre provisional largo.
                         </p>
                       </section>
                     ) : null}
 
-                    <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
+                    <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                             Tu equipo
                           </p>
-                          <h2 className="mt-2 text-2xl font-semibold text-white">
+                          <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
                             {team.name}
                           </h2>
                         </div>
-                        <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                        <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
                           {formatStageLabel(state.stage)}
                         </span>
                       </div>
@@ -677,10 +681,10 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                         {team.players.map((player) => (
                           <div
                             key={`${team.id}-${player.slot}`}
-                            className="rounded-[20px] border border-white/10 bg-white/[0.03] p-3"
+                            className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-3"
                           >
                             <div className="flex items-center gap-3">
-                              <div className="h-16 w-16 overflow-hidden rounded-full border border-white/12 bg-[#11253d]">
+                              <div className="h-16 w-16 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
                                 {player.photoUrl ? (
                                   <img
                                     src={player.photoUrl}
@@ -690,27 +694,27 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                                 ) : null}
                               </div>
                               <div>
-                                <p className="font-semibold text-white">{player.name}</p>
-                                <p className="text-sm text-white/48">Plaza {player.slot}</p>
+                                <p className="font-semibold text-[var(--foreground)]">{player.name}</p>
+                                <p className="text-sm text-[var(--muted-soft)]">Plaza {player.slot}</p>
                               </div>
                             </div>
                           </div>
                         ))}
                       </div>
                       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-[18px] border border-white/10 bg-white/[0.04] px-4 py-3">
-                          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/42">
+                        <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-4 py-3">
+                          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                             Balance
                           </p>
-                          <p className="mt-2 text-base font-semibold text-white">
+                          <p className="mt-2 text-base font-semibold text-[var(--foreground)]">
                             {team.wins}-{team.losses}
                           </p>
                         </div>
-                        <div className="rounded-[18px] border border-white/10 bg-white/[0.04] px-4 py-3">
-                          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/42">
+                        <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-4 py-3">
+                          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                             Partidas cerradas
                           </p>
-                          <p className="mt-2 text-base font-semibold text-white">
+                          <p className="mt-2 text-base font-semibold text-[var(--foreground)]">
                             {completedMatchesCount}/{sortedTeamMatches.length}
                           </p>
                         </div>
@@ -718,18 +722,17 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                     </section>
 
                     {sortedTeamMatches.length > 0 ? (
-                      <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
+                      <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
-                            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-                              Recorrido
-                            </p>
-                            <p className="mt-2 text-sm leading-6 text-white/68">
-                              Las mesas aparecen en orden real del torneo y el marcador se muestra
-                              siempre desde la perspectiva de vuestro equipo.
-                            </p>
+                            <div className="flex items-center gap-2">
+                              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                                Recorrido
+                              </p>
+                              <InfoHint label="Las mesas aparecen en orden real y el marcador se muestra desde tu equipo." />
+                            </div>
                           </div>
-                          <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                          <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
                             {completedMatchesCount}/{sortedTeamMatches.length}
                           </span>
                         </div>
@@ -747,20 +750,20 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                             return (
                               <div
                                 key={match.id}
-                                className="rounded-[18px] border border-white/10 bg-white/[0.03] px-4 py-4"
+                                className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-4"
                               >
                                 <div className="flex flex-wrap items-center justify-between gap-3">
-                                  <p className="text-sm font-semibold text-white">
+                                  <p className="text-sm font-semibold text-[var(--foreground)]">
                                     {hiddenCurrentSwissMatch
                                       ? "Ronda actual · pendiente de sorteo"
                                       : getMatchHeading(match)}
                                   </p>
-                                  <span className="rounded-full border border-white/10 bg-black/25 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[#b8dfff]">
+                                  <span className="rounded-full border border-[var(--stroke)] bg-[rgba(2,4,3,0.54)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
                                     {resultLabel}
                                   </span>
                                 </div>
 
-                                <p className="mt-2 text-sm leading-6 text-white/72">
+                                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                                   {match.bye
                                     ? "Descanso automático para esta ronda."
                                     : hiddenCurrentSwissMatch
@@ -772,37 +775,37 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
 
                                 {perspectiveScore ? (
                                   pointsOnlyMode ? (
-                                    <div className="mt-3 rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
-                                      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                    <div className="mt-3 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.46)] px-3 py-2">
+                                      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                                         Puntos
                                       </p>
-                                      <p className="mt-1 text-sm font-semibold text-white">
+                                      <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">
                                         {perspectiveScore.own.points}-{perspectiveScore.opponent.points}
                                       </p>
                                     </div>
                                   ) : (
                                     <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                                      <div className="rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
-                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                      <div className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.46)] px-3 py-2">
+                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                                           Vacas
                                         </p>
-                                        <p className="mt-1 text-sm font-semibold text-white">
+                                        <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">
                                           {perspectiveScore.own.vacas}-{perspectiveScore.opponent.vacas}
                                         </p>
                                       </div>
-                                      <div className="rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
-                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                      <div className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.46)] px-3 py-2">
+                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                                           Juegos
                                         </p>
-                                        <p className="mt-1 text-sm font-semibold text-white">
+                                        <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">
                                           {perspectiveScore.own.games}-{perspectiveScore.opponent.games}
                                         </p>
                                       </div>
-                                      <div className="rounded-[16px] border border-white/10 bg-black/20 px-3 py-2">
-                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                                      <div className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.46)] px-3 py-2">
+                                        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                                           Puntos
                                         </p>
-                                        <p className="mt-1 text-sm font-semibold text-white">
+                                        <p className="mt-1 text-sm font-semibold text-[var(--foreground)]">
                                           {perspectiveScore.own.points}-{perspectiveScore.opponent.points}
                                         </p>
                                       </div>
@@ -817,21 +820,21 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                     ) : null}
                   </div>
                 ) : (
-                  <div className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5 text-sm leading-6 text-white/72">
+                  <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5 text-sm leading-6 text-[var(--muted)]">
                     Tu ficha ya está dentro. Ahora la mesa está formando las parejas; cuando te asignen una,
                     esta pantalla mostrará tu equipo y su estado.
                   </div>
                 )}
 
-                <section className="rounded-[26px] border border-white/10 bg-[#0b1320] p-5">
+                <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-                        Chat del torneo
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-white/68">
-                        Habla con el resto de móviles que estén jugando este torneo.
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                          Chat
+                        </p>
+                        <InfoHint label="Mensajes compartidos con los móviles registrados en este torneo." />
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -842,7 +845,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                     </button>
                   </div>
 
-                  <div className="mt-4 h-[24rem] space-y-3 overflow-y-auto rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
+                  <div className="mt-4 h-[24rem] space-y-3 overflow-y-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
                     {state.chatMessages.length > 0 ? (
                       state.chatMessages.map((message) => {
                         const author = participantsById.get(message.participantId);
@@ -851,28 +854,28 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                         return (
                           <div
                             key={message.id}
-                            className={`rounded-[18px] px-4 py-3 ${
+                            className={`rounded-[8px] px-4 py-3 ${
                               isOwn
-                                ? "ml-8 border border-[#4a67ff]/30 bg-[#203360]"
-                                : "mr-8 border border-white/10 bg-[#0d1727]"
+                                ? "ml-8 border border-[var(--accent-border)] bg-[var(--accent-soft)]"
+                                : "mr-8 border border-[var(--stroke)] bg-[var(--surface-strong)]"
                             }`}
                           >
                             <div className="flex items-center justify-between gap-3">
-                              <p className="text-sm font-semibold text-white">
+                              <p className="text-sm font-semibold text-[var(--foreground)]">
                                 {author?.name ?? "Jugador"}
                               </p>
-                              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/48">
+                              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                                 {formatTime(message.createdAt)}
                               </span>
                             </div>
-                            <p className="mt-2 text-sm leading-6 text-white/78">
+                            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                               {message.text}
                             </p>
                           </div>
                         );
                       })
                     ) : (
-                      <div className="text-sm leading-6 text-white/48">
+                      <div className="text-sm leading-6 text-[var(--muted-soft)]">
                         Todavía no hay mensajes en el chat.
                       </div>
                     )}
@@ -883,7 +886,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                       value={chatInput}
                       onChange={(event) => setChatInput(event.target.value)}
                       placeholder="Escribe al resto de jugadores"
-                      className="input-shell !bg-[#101b2d] !text-white placeholder:!text-white/40"
+                      className="input-shell !bg-[var(--surface-inset)] !text-[var(--foreground)] placeholder:!text-[var(--muted-soft)]"
                     />
                     <button
                       type="submit"
@@ -898,7 +901,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
             )}
 
             {feedback ? (
-              <div className="rounded-[18px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-white/82">
+              <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3 text-sm leading-6 text-[var(--foreground)]">
                 {feedback}
               </div>
             ) : null}

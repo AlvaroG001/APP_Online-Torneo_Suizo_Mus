@@ -3,6 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import QRCode from "qrcode";
+import { InfoHint } from "@/components/info-hint";
 import {
   useEffect,
   useMemo,
@@ -10,6 +11,7 @@ import {
   useState,
   useSyncExternalStore,
   useTransition,
+  type CSSProperties,
   type FormEvent,
   type ReactNode,
 } from "react";
@@ -30,6 +32,7 @@ import {
 
 interface TournamentFlowProps {
   initialState: TournamentState;
+  networkBaseUrls?: string[];
 }
 
 interface FeedbackState {
@@ -78,6 +81,50 @@ type Screen = "url" | "setup" | "registration" | "swiss" | "topcut";
 
 function subscribeToNothing(): () => void {
   return () => {};
+}
+
+function getViewportProfileSnapshot(): {
+  width: number;
+  height: number;
+  density: "compact" | "balanced" | "spacious";
+} {
+  if (typeof window === "undefined") {
+    return { width: 1920, height: 1080, density: "balanced" };
+  }
+
+  const width = Math.round(window.visualViewport?.width ?? window.innerWidth);
+  const height = Math.round(window.visualViewport?.height ?? window.innerHeight);
+  const area = width * height;
+  const shortestSide = Math.min(width, height);
+  const density =
+    height < 820 || width < 1360
+      ? "compact"
+      : area >= 1920 * 1000 && shortestSide >= 1000
+        ? "spacious"
+        : "balanced";
+
+  return { width, height, density };
+}
+
+function useViewportProfile(): ReturnType<typeof getViewportProfileSnapshot> {
+  const [profile, setProfile] = useState(getViewportProfileSnapshot);
+
+  useEffect(() => {
+    function handleResize(): void {
+      setProfile(getViewportProfileSnapshot());
+    }
+
+    window.addEventListener("resize", handleResize);
+    window.visualViewport?.addEventListener("resize", handleResize);
+    handleResize();
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.visualViewport?.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  return profile;
 }
 
 function getBrowserOriginSnapshot(): string {
@@ -256,6 +303,14 @@ function getAssignedParticipantIds(teams: Team[]): Set<string> {
   );
 }
 
+function getTeamConfirmationLabel(team: Team): string {
+  if (!isTeamComplete(team)) {
+    return "pendiente";
+  }
+
+  return team.confirmed ? "aceptada" : "sin aceptar";
+}
+
 function teamSlotPlayer(team: Team, slot: PlayerSlot) {
   return slot === "A" ? team.players[0] : team.players[1];
 }
@@ -371,7 +426,7 @@ function TeamFaces({
       {team.players.map((player, index) => (
         <div
           key={`${team.id}-${player.slot}-${player.id}`}
-          className={`${sizeClasses.margin} first:ml-0 flex ${sizeClasses.frame} items-center justify-center overflow-hidden rounded-full border border-white/15 bg-[#101a2a] font-semibold text-white ${
+          className={`${sizeClasses.margin} first:ml-0 flex ${sizeClasses.frame} items-center justify-center overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)] font-semibold text-[var(--foreground)] ${
             index === 1 ? sizeClasses.overlap : ""
           }`}
         >
@@ -392,7 +447,7 @@ function TeamFaces({
 
 function StageBadge({ label }: { label: string }) {
   return (
-    <span className="whitespace-nowrap rounded-full border border-white/12 bg-white/8 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/74">
+    <span className="inline-flex min-h-7 items-center justify-center whitespace-nowrap rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1 text-center font-mono text-[11px] uppercase leading-none tracking-[0.18em] text-[var(--muted)]">
       {label}
     </span>
   );
@@ -408,8 +463,8 @@ function StepPreviewPlayerRow({
   const player = team.players[index];
 
   return (
-    <div className="flex items-center gap-3 rounded-[16px] border border-white/10 bg-white/[0.03] px-4 py-3">
-      <div className="h-14 w-14 overflow-hidden rounded-full border border-white/12 bg-[#11253d]">
+    <div className="flex items-center gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3">
+      <div className="h-14 w-14 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
         {player.photoUrl ? (
           <img
             src={player.photoUrl}
@@ -417,16 +472,16 @@ function StepPreviewPlayerRow({
             className="h-full w-full object-cover"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center font-semibold text-white/74">
+          <div className="flex h-full w-full items-center justify-center font-semibold text-[var(--muted)]">
             {index === 0 ? "A" : "B"}
           </div>
         )}
       </div>
       <div className="min-w-0">
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/36">
+        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
           Integrante {index === 0 ? "A" : "B"}
         </p>
-        <p className="mt-1 truncate text-sm font-semibold text-white">
+        <p className="mt-1 truncate text-sm font-semibold text-[var(--foreground)]">
           {playerName(team, index)}
         </p>
       </div>
@@ -442,11 +497,31 @@ function StepPreviewTeamSummary({ team }: { team: Team }) {
         <StepPreviewPlayerRow team={team} index={1} />
       </div>
       {!team.nameIsCustom ? null : (
-        <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.18em] text-[#77cfff]">
+        <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
           Nombre definido desde móvil
         </p>
       )}
     </>
+  );
+}
+
+function AdminCredit() {
+  return (
+    <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-[rgba(242,247,238,0.42)]">
+      Creado por Álvaro García Ortiz
+    </p>
+  );
+}
+
+function FeedbackToast({ feedback }: { feedback: FeedbackState | null }) {
+  if (!feedback || feedback.tone !== "error") {
+    return null;
+  }
+
+  return (
+    <div className="fixed bottom-4 left-4 z-50 max-w-md rounded-[8px] border border-rose-500/30 bg-rose-500/14 px-4 py-3 text-sm leading-6 text-rose-100 shadow-[0_18px_60px_rgba(0,0,0,0.36)]">
+      {feedback.text}
+    </div>
   );
 }
 
@@ -456,6 +531,7 @@ function ScreenFrame({
   description,
   leftSlot,
   rightSlot,
+  activeUrl,
   children,
 }: {
   eyebrow: string;
@@ -463,33 +539,55 @@ function ScreenFrame({
   description?: string;
   leftSlot?: ReactNode;
   rightSlot?: ReactNode;
+  activeUrl?: string;
   children: ReactNode;
 }) {
+  const viewportProfile = useViewportProfile();
+
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#04070d] text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.18),_transparent_28%),radial-gradient(circle_at_82%_14%,_rgba(37,99,235,0.14),_transparent_26%),linear-gradient(180deg,#060a12_0%,#09111d_52%,#05080f_100%)]" />
+    <div className="relative h-[100svh] overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.055)_0%,transparent_34%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,transparent_0%,rgba(255,255,255,0.03)_50%,transparent_100%)] opacity-40" />
 
-      <main className="relative mx-auto flex min-h-screen w-full max-w-[1680px] flex-col px-4 py-5 md:px-8 md:py-8">
-        <header className="grid gap-6 rounded-[34px] border border-white/10 bg-white/[0.04] p-6 shadow-[0_35px_120px_rgba(0,0,0,0.28)] backdrop-blur md:grid-cols-[1fr_auto] md:p-8">
+      <main
+        className="admin-shell relative mx-auto flex h-[100svh] w-full max-w-[1920px] flex-col overflow-hidden px-3 py-4 md:px-4 md:py-5 2xl:px-5"
+        data-density={viewportProfile.density}
+        style={
+          {
+            "--admin-vw": `${viewportProfile.width}px`,
+            "--admin-vh": `${viewportProfile.height}px`,
+          } as CSSProperties
+        }
+      >
+        <header className="admin-header grid gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-4 shadow-[0_35px_120px_rgba(0,0,0,0.28)] md:grid-cols-[1fr_auto] md:p-4">
           <div className="max-w-4xl">
-            {leftSlot ? <div className="mb-5">{leftSlot}</div> : null}
-            <p className="font-mono text-xs uppercase tracking-[0.28em] text-[#77cfff]">
+            {leftSlot ? <div className="mb-2">{leftSlot}</div> : null}
+            <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--accent)]">
               {eyebrow}
             </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-[-0.05em] text-white md:text-7xl">
+            <h1 className="mt-2 text-[clamp(2rem,3.2vw,3.65rem)] font-semibold leading-[0.96] tracking-normal text-[var(--foreground)]">
               {title}
             </h1>
             {description ? (
-              <p className="mt-4 max-w-3xl text-sm leading-7 text-white/68 md:text-base">
+              <p className="mt-4 max-w-3xl text-sm leading-7 text-[var(--muted)] md:text-base">
                 {description}
               </p>
             ) : null}
           </div>
-          {rightSlot ? <div className="md:justify-self-end">{rightSlot}</div> : null}
+          <div className="flex min-h-full flex-col items-end justify-between gap-4 md:justify-self-end">
+            {rightSlot ? <div className="flex flex-wrap justify-end gap-2">{rightSlot}</div> : null}
+            <div className="max-w-[min(44vw,620px)] text-right">
+              {activeUrl ? (
+                <p className="truncate font-mono text-[9px] uppercase tracking-[0.18em] text-[rgba(242,247,238,0.46)]">
+                  URL activa · {activeUrl}
+                </p>
+              ) : null}
+              <AdminCredit />
+            </div>
+          </div>
         </header>
 
-        <div className="mt-6 flex-1">{children}</div>
+        <div className="admin-content mt-4 min-h-0 flex-1 overflow-hidden">{children}</div>
       </main>
     </div>
   );
@@ -502,6 +600,7 @@ function PublicUrlScreen({
   onUseCurrentOrigin,
   canUseCurrentOrigin,
   browserOrigin,
+  networkBaseUrls,
   isPending,
   feedback,
 }: {
@@ -511,14 +610,21 @@ function PublicUrlScreen({
   onUseCurrentOrigin: () => void;
   canUseCurrentOrigin: boolean;
   browserOrigin: string;
+  networkBaseUrls: string[];
   isPending: boolean;
   feedback: FeedbackState | null;
 }) {
+  const suggestedNetworkUrl = networkBaseUrls[0] ?? "";
+  const normalizedValue = normalizeBaseUrlInput(value);
+  const valueLooksStale =
+    Boolean(normalizedValue && suggestedNetworkUrl) &&
+    !networkBaseUrls.includes(normalizedValue);
+
   return (
     <ScreenFrame
       eyebrow="Paso 1 · Acceso"
-      title="Pon primero la URL del torneo"
-      description="Esta dirección es la base real del QR general de inscripción. Si los móviles están en la misma Wi‑Fi que tu portátil, aquí va la dirección Network de Next. Si abres el torneo a internet, aquí va el dominio o túnel público."
+      title="URL del torneo"
+      activeUrl={normalizeBaseUrlInput(value)}
       rightSlot={
         <div className="flex flex-wrap gap-2">
           <StageBadge label="Mesa privada" />
@@ -526,42 +632,19 @@ function PublicUrlScreen({
         </div>
       }
     >
-      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <section className="rounded-[30px] border border-white/10 bg-white/[0.04] p-6 backdrop-blur">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-[24px] border border-white/10 bg-[#0b1320] p-5">
-              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-                En tu red local
-              </p>
-              <p className="mt-3 text-sm leading-7 text-white/72">
-                Usa la dirección `Network` de Next. Esa será la que escaneen todos los
-                móviles conectados al router del torneo.
-              </p>
-            </div>
-            <div className="rounded-[24px] border border-white/10 bg-[#0b1320] p-5">
-              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-                Desde internet
-              </p>
-              <p className="mt-3 text-sm leading-7 text-white/72">
-                Usa la URL pública real, mejor con HTTPS, para que el QR siga valiendo
-                fuera de la red local.
-              </p>
-            </div>
-          </div>
-        </section>
-
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,0.72fr)]">
         <form
           onSubmit={onSubmit}
-          className="glass-panel rounded-[30px] bg-white/[0.9] p-6 text-[--foreground]"
+          className="glass-panel rounded-[8px]  p-6 text-[var(--foreground)]"
         >
-          <p className="font-mono text-xs uppercase tracking-[0.24em] text-[--muted]">
-            URL base
-          </p>
-          <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[--foreground]">
-            Lo primero que verá cualquier móvil
-          </h2>
+          <div className="flex items-center gap-2">
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+              URL base
+            </p>
+            <InfoHint label="Usa la URL que abrirán los móviles: la dirección Network de Next si están en la misma Wi-Fi, o el dominio/túnel público si juegan desde fuera." />
+          </div>
           <label className="mt-6 block">
-            <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[--muted]">
+            <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
               URL del torneo
             </span>
             <input
@@ -581,21 +664,26 @@ function PublicUrlScreen({
                 Usar {browserOrigin}
               </button>
             ) : null}
+            {suggestedNetworkUrl ? (
+              <button
+                type="button"
+                onClick={() => onChange(suggestedNetworkUrl)}
+                className="button-secondary"
+              >
+                Usar Wi-Fi {suggestedNetworkUrl}
+              </button>
+            ) : null}
           </div>
 
-          {feedback ? (
-            <div
-              className={`mt-5 rounded-[20px] border px-4 py-3 text-sm leading-6 ${
-                feedback.tone === "success"
-                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-900"
-                  : "border-rose-500/20 bg-rose-500/10 text-rose-900"
-              }`}
-            >
-              {feedback.text}
+          {valueLooksStale ? (
+            <div className="mt-5 rounded-[8px] border border-amber-400/24 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+              La URL guardada parece de otra red. Para esta Wi-Fi usa{" "}
+              <span className="font-mono">{suggestedNetworkUrl}</span>.
             </div>
           ) : null}
         </form>
       </div>
+      <FeedbackToast feedback={feedback} />
     </ScreenFrame>
   );
 }
@@ -605,7 +693,6 @@ function TournamentSetupScreen({
   planSummary,
   onChange,
   onSubmit,
-  onSaveActiveUrl,
   onBackToUrl,
   onContinue,
   continueLabel,
@@ -622,7 +709,6 @@ function TournamentSetupScreen({
   };
   onChange: (patch: Partial<SetupFormState>) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onSaveActiveUrl: () => void;
   onBackToUrl?: () => void;
   onContinue?: () => void;
   continueLabel?: string;
@@ -634,87 +720,34 @@ function TournamentSetupScreen({
   return (
     <ScreenFrame
       eyebrow="Paso 2 · Configuración"
-      title="Define el formato del torneo"
-      description="Aquí se fija el tamaño del torneo, se deja cerrada la URL activa y se prepara la siguiente pantalla, que ya será el registro por QR y la formación de parejas."
+      title="Formato"
+      activeUrl={publicBaseUrl}
       leftSlot={
         onBackToUrl ? <BackButton label="Volver a la URL" onClick={onBackToUrl} /> : undefined
       }
-      rightSlot={
-        <div className="rounded-[26px] border border-white/10 bg-white/[0.05] px-5 py-4 text-right">
-          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-            Creada por
-          </p>
-          <p className="mt-2 text-xl font-semibold text-white">
-            Álvaro García Ortiz
-          </p>
-        </div>
-      }
     >
-      <div className="grid gap-6 lg:grid-cols-[0.92fr_1.08fr]">
-        <section className="rounded-[30px] border border-white/10 bg-white/[0.04] p-6 backdrop-blur">
-          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-            Qué prepara esta fase
-          </p>
-          <div className="mt-5 grid gap-4">
-            {[
-              "Número de parejas objetivo del torneo.",
-              "Vacas por partida y juegos por vaca.",
-              "Puntos por juego entre 30 y 40.",
-              "Formato: suizo solo o suizo + top 4.",
-              "URL activa que usará el QR de inscripción.",
-            ].map((item) => (
-              <div
-                key={item}
-                className="rounded-[22px] border border-white/10 bg-[#0b1320] px-4 py-4 text-sm leading-7 text-white/72"
-              >
-                {item}
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-6 rounded-[22px] border border-[#315d8d] bg-[linear-gradient(180deg,rgba(25,44,72,0.9),rgba(10,18,31,0.96))] p-5">
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-              Estructura calculada
-            </p>
-            <h3 className="mt-2 text-2xl font-semibold text-white">{planSummary.heading}</h3>
-            <p className="mt-3 text-sm leading-7 text-white/72">{planSummary.detail}</p>
+      <div className="grid h-full min-h-0 gap-4 lg:grid-cols-[0.82fr_1.18fr]">
+        <section className="min-h-0 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-4">
+          <div className="rounded-[8px] border border-[var(--accent-border)] bg-[linear-gradient(180deg,rgba(124,255,79,0.10),rgba(18,24,19,0.98))] p-5">
+            <div className="flex items-center gap-2">
+              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                Estructura calculada
+              </p>
+              <InfoHint label="Se calcula automáticamente con el número de parejas y el formato elegido." />
+            </div>
+            <h3 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">{planSummary.heading}</h3>
             <div className="mt-4 flex flex-wrap gap-2">
               <StageBadge label={planSummary.roundsLabel} />
               <StageBadge label={formatTournamentFormatLabel(form.format)} />
             </div>
           </div>
 
-          <div className="mt-6 rounded-[22px] border border-[#1c3657] bg-[#09111d] p-5">
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-              URL activa
-            </p>
-            <input
-              value={form.publicBaseUrl}
-              onChange={(event) => onChange({ publicBaseUrl: event.target.value })}
-              placeholder="http://192.168.1.41:3000"
-              className="input-shell mt-3 border-white/10 bg-[#0b1320] !text-white placeholder:!text-white/45"
-            />
-            <div className="mt-4 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={onSaveActiveUrl}
-                disabled={isPending}
-                className="button-secondary"
-              >
-                Guardar URL activa
-              </button>
-              <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
-                Actual: {publicBaseUrl || "sin definir"}
-              </span>
-            </div>
-          </div>
-
           {currentStateDetail ? (
-            <div className="mt-6 rounded-[22px] border border-[#315d8d] bg-[linear-gradient(180deg,rgba(25,44,72,0.9),rgba(10,18,31,0.96))] p-5">
-              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+            <div className="mt-4 rounded-[8px] border border-[var(--accent-border)] bg-[linear-gradient(180deg,rgba(124,255,79,0.10),rgba(18,24,19,0.98))] p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                 Estado actual
               </p>
-              <p className="mt-3 text-sm leading-7 text-white/72">{currentStateDetail}</p>
+              <p className="mt-3 text-sm leading-7 text-[var(--muted)]">{currentStateDetail}</p>
               {onContinue && continueLabel ? (
                 <div className="mt-5">
                   <button type="button" onClick={onContinue} className="button-secondary">
@@ -728,11 +761,11 @@ function TournamentSetupScreen({
 
         <form
           onSubmit={onSubmit}
-          className="glass-panel rounded-[30px] bg-white/[0.9] p-6 text-[--foreground]"
+          className="glass-panel min-h-0 rounded-[8px] p-4 text-[var(--foreground)]"
         >
           <div className="grid gap-4 md:grid-cols-2">
             <label className="block md:col-span-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[--muted]">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                 Nombre del torneo
               </span>
               <input
@@ -742,9 +775,10 @@ function TournamentSetupScreen({
               />
             </label>
 
-            <label className="block md:col-span-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[--muted]">
+            <div className="block md:col-span-2">
+              <span className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                 Tipo de torneo
+                <InfoHint label="Elige suizo solo para terminar por clasificación, o suizo + top 4 para jugar semifinales y final." />
               </span>
               <select
                 value={form.format}
@@ -756,10 +790,10 @@ function TournamentSetupScreen({
                 <option value="swiss_top4">Suizo + top 4</option>
                 <option value="swiss_only">Suizo solo</option>
               </select>
-            </label>
+            </div>
 
             <label className="block">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[--muted]">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                 Número de parejas
               </span>
               <input
@@ -773,7 +807,7 @@ function TournamentSetupScreen({
             </label>
 
             <label className="block">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[--muted]">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                 Vacas por partida
               </span>
               <input
@@ -787,7 +821,7 @@ function TournamentSetupScreen({
             </label>
 
             <label className="block">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[--muted]">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                 Juegos por vaca
               </span>
               <input
@@ -801,7 +835,7 @@ function TournamentSetupScreen({
             </label>
 
             <label className="block">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[--muted]">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                 Puntos por juego
               </span>
               <input
@@ -822,19 +856,9 @@ function TournamentSetupScreen({
             </button>
           </div>
 
-          {feedback ? (
-            <div
-              className={`mt-5 rounded-[20px] border px-4 py-3 text-sm leading-6 ${
-                feedback.tone === "success"
-                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-900"
-                  : "border-rose-500/20 bg-rose-500/10 text-rose-900"
-              }`}
-            >
-              {feedback.text}
-            </div>
-          ) : null}
         </form>
       </div>
+      <FeedbackToast feedback={feedback} />
     </ScreenFrame>
   );
 }
@@ -849,6 +873,7 @@ function RegistrationQrCard({
     dataUrl: "",
   });
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const currentQrDataUrl = qrState.url === registrationUrl ? qrState.dataUrl : "";
 
   useEffect(() => {
@@ -860,13 +885,28 @@ function RegistrationQrCard({
       width: 420,
       margin: 1,
       color: {
-        dark: "#07111f",
-        light: "#f5fbff",
+        dark: "#10160f",
+        light: "#f4f7ef",
       },
     }).then((dataUrl) => {
       setQrState({ url: registrationUrl, dataUrl });
     });
   }, [registrationUrl]);
+
+  useEffect(() => {
+    if (!expanded) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setExpanded(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [expanded]);
 
   async function handleCopy(): Promise<void> {
     if (!registrationUrl) {
@@ -879,63 +919,74 @@ function RegistrationQrCard({
   }
 
   return (
-    <div className="rounded-[30px] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+    <>
+    <div className="registration-qr-card rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-3">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-            QR de inscripción
-          </p>
-          <h3 className="mt-2 text-2xl font-semibold text-white">
+          <div className="flex items-center gap-2">
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+              QR de inscripción
+            </p>
+            <InfoHint label="Este QR lo escanean los jugadores para registrarse con nombre y foto desde su móvil." />
+          </div>
+          <h3 className="mt-1 text-xl font-semibold text-[var(--foreground)]">
             Un solo QR para todos los jugadores
           </h3>
-          <p className="mt-3 text-sm leading-6 text-white/68">
-            Cada móvil entra aquí, registra nombre y foto obligatoria, y queda asociado a ese
-            dispositivo para ver luego su pareja y el chat.
-          </p>
         </div>
         <button type="button" onClick={() => void handleCopy()} className="button-secondary">
           {copied ? "Copiado" : "Copiar enlace"}
         </button>
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-[300px_1fr]">
-        <div className="rounded-[24px] border border-white/10 bg-[#edf7ff] p-4">
+      <div className="mt-3 grid gap-3 lg:grid-cols-[150px_1fr]">
+        <button
+          type="button"
+          onClick={() => currentQrDataUrl && setExpanded(true)}
+          className="rounded-[8px] border border-[var(--stroke)] bg-[#f4f7ef] p-2 transition hover:border-[var(--accent-border)]"
+          aria-label="Ampliar QR de inscripción"
+        >
           {currentQrDataUrl ? (
             <img
               src={currentQrDataUrl}
               alt="QR de inscripción"
-              className="aspect-square w-full rounded-[18px] object-cover"
+              className="aspect-square w-full rounded-[8px] object-cover"
             />
           ) : (
-            <div className="flex aspect-square items-center justify-center rounded-[18px] border border-dashed border-slate-300 text-sm text-slate-500">
+            <div className="flex aspect-square items-center justify-center rounded-[8px] border border-dashed border-[#c9d2c2] text-sm text-[var(--muted-soft)]">
               Generando QR...
             </div>
           )}
-        </div>
+        </button>
 
         <div className="space-y-4">
-          <div className="rounded-[22px] border border-white/10 bg-[#0b1320] p-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+          <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-3">
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
               Enlace activo
             </p>
-            <p className="mt-3 break-all text-sm leading-6 text-white/74">
+            <p className="mt-2 break-all font-mono text-xs leading-5 text-[var(--muted)]">
               {registrationUrl || "Guarda primero la URL activa del torneo."}
             </p>
-          </div>
-
-          <div className="rounded-[22px] border border-white/10 bg-[#0b1320] p-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
-              Qué hace cada móvil
-            </p>
-            <div className="mt-3 space-y-3 text-sm leading-6 text-white/68">
-              <p>1. Escanea el QR.</p>
-              <p>2. Rellena nombre y sube una foto obligatoria.</p>
-              <p>3. Ese dispositivo queda identificado y luego verá su pareja y el chat.</p>
-            </div>
           </div>
         </div>
       </div>
     </div>
+    {expanded && currentQrDataUrl ? (
+      <button
+        type="button"
+        className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-[rgba(2,4,3,0.9)] p-8 backdrop-blur-sm"
+        onClick={() => setExpanded(false)}
+        aria-label="Cerrar QR ampliado"
+      >
+        <span className="w-full max-w-[min(78vh,720px)] rounded-[12px] border border-[var(--accent-border)] bg-[#f4f7ef] p-5 shadow-[0_30px_140px_rgba(0,0,0,0.55)]">
+          <img
+            src={currentQrDataUrl}
+            alt="QR de inscripción ampliado"
+            className="aspect-square w-full rounded-[8px] object-cover"
+          />
+        </span>
+      </button>
+    ) : null}
+    </>
   );
 }
 
@@ -945,39 +996,28 @@ function ParticipantCard({
   dimmed = false,
   onDragStart,
   onDragEnd,
-  canRename = false,
-  onRename,
-  isRenaming = false,
+  canEdit = false,
+  onEdit,
 }: {
   participant: Participant;
   draggable?: boolean;
   dimmed?: boolean;
   onDragStart?: (participantId: string) => void;
   onDragEnd?: () => void;
-  canRename?: boolean;
-  onRename?: (participantId: string, name: string) => void;
-  isRenaming?: boolean;
+  canEdit?: boolean;
+  onEdit?: (participant: Participant) => void;
 }) {
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [draftName, setDraftName] = useState(participant.name);
-
   const isBot = participant.deviceId.startsWith("bot-");
 
   return (
     <div
       draggable={draggable}
       onClick={() => {
-        if (!canRename) {
+        if (!canEdit) {
           return;
         }
 
-        setIsEditingName((current) => {
-          if (!current) {
-            setDraftName(participant.name);
-          }
-
-          return !current;
-        });
+        onEdit?.(participant);
       }}
       onDragStart={(event) => {
         if (!draggable) {
@@ -987,13 +1027,13 @@ function ParticipantCard({
         onDragStart?.(participant.id);
       }}
       onDragEnd={() => onDragEnd?.()}
-      className={`rounded-[22px] border border-white/10 bg-[#0b1320] p-4 transition ${
+      className={`rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-3 transition ${
         draggable ? "cursor-grab active:cursor-grabbing" : ""
-      } ${canRename ? "cursor-pointer hover:border-white/22" : ""} ${isEditingName ? "border-[#4fd1ff]/40" : ""} ${dimmed ? "opacity-45" : ""}`}
+      } ${canEdit ? "cursor-pointer hover:border-[var(--accent-border)]" : ""} ${dimmed ? "opacity-45" : ""}`}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="h-16 w-16 overflow-hidden rounded-full border border-white/10 bg-[#11253d]">
+          <div className="h-12 w-12 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
             <img
               src={participant.photoUrl}
               alt={participant.name}
@@ -1001,13 +1041,13 @@ function ParticipantCard({
             />
           </div>
           <div>
-            <p className="font-semibold text-white">{participant.name}</p>
+            <p className="truncate text-sm font-semibold text-[var(--foreground)]">{participant.name}</p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
-              <p className="text-xs text-white/42">
+              <p className="text-[10px] text-[var(--muted-soft)]">
                 alta {formatSyncTime(participant.registeredAt)}
               </p>
               {isBot ? (
-                <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-[#77cfff]">
+                <span className="rounded-full border border-[var(--stroke)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-[var(--accent)]">
                   bot
                 </span>
               ) : null}
@@ -1016,38 +1056,6 @@ function ParticipantCard({
         </div>
       </div>
 
-      {canRename && isEditingName ? (
-        <form
-          className="mt-4 flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-
-            if (!draftName.trim()) {
-              return;
-            }
-
-            onRename?.(participant.id, draftName.trim());
-            setIsEditingName(false);
-          }}
-          onClick={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <input
-            value={draftName}
-            onChange={(event) => setDraftName(event.target.value)}
-            placeholder="Nombre del bot"
-            className="input-shell !bg-[#101b2d] !text-white placeholder:!text-white/35"
-          />
-          <button
-            type="submit"
-            disabled={isRenaming || !draftName.trim()}
-            className="button-secondary"
-          >
-            {isRenaming ? "Guardando" : "Guardar"}
-          </button>
-        </form>
-      ) : null}
     </div>
   );
 }
@@ -1068,13 +1076,13 @@ function ManualTeamSlotButton({
     <button
       type="button"
       onClick={() => onOpen(team.id, slot)}
-      className={`rounded-[20px] border border-dashed p-4 ${
-        filled ? "border-white/12 bg-white/[0.04]" : "border-[#5ecfff]/34 bg-[#08111d]"
+      className={`rounded-[8px] border border-dashed p-3 ${
+        filled ? "border-[var(--stroke)] bg-[var(--surface)]" : "border-[var(--accent-border)] bg-[var(--surface-strong)]"
       }`}
     >
       {filled ? (
         <div className="flex items-center gap-3 text-left">
-          <div className="h-[72px] w-[72px] overflow-hidden rounded-full border border-white/12 bg-[#11253d]">
+          <div className="h-12 w-12 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
             {player.photoUrl ? (
               <img
                 src={player.photoUrl}
@@ -1084,12 +1092,12 @@ function ManualTeamSlotButton({
             ) : null}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="font-semibold text-white">{player.name}</p>
-            <p className="mt-1 text-xs text-white/42">Plaza {slot}</p>
+            <p className="truncate text-sm font-semibold text-[var(--foreground)]">{player.name}</p>
+            <p className="mt-1 text-xs text-[var(--muted-soft)]">Plaza {slot}</p>
           </div>
         </div>
       ) : (
-        <div className="flex min-h-24 items-center justify-center text-center text-sm leading-6 text-white/46">
+        <div className="flex min-h-14 items-center justify-center text-center text-sm leading-6 text-[var(--muted-soft)]">
           Pulsa para elegir a la persona {slot}
         </div>
       )}
@@ -1103,10 +1111,13 @@ function RegistrationStageScreen({
   onBack,
   onAddBotParticipant,
   onRenameParticipant,
+  onDeleteBotParticipant,
   renamingParticipantId,
+  deletingParticipantId,
   onCreateRandomTeams,
   onPrepareManualTeams,
   onAssignParticipant,
+  onConfirmManualTeam,
   onStartTournament,
   isPending,
   feedback,
@@ -1116,7 +1127,9 @@ function RegistrationStageScreen({
   onBack: () => void;
   onAddBotParticipant: () => void;
   onRenameParticipant: (participantId: string, name: string) => void;
+  onDeleteBotParticipant: (participantId: string) => void;
   renamingParticipantId: string | null;
+  deletingParticipantId: string | null;
   onCreateRandomTeams: () => void;
   onPrepareManualTeams: () => void;
   onAssignParticipant: (
@@ -1124,6 +1137,7 @@ function RegistrationStageScreen({
     slot: PlayerSlot,
     participantId: string | null,
   ) => void;
+  onConfirmManualTeam: (teamId: string) => void;
   onStartTournament: () => void;
   isPending: boolean;
   feedback: FeedbackState | null;
@@ -1137,7 +1151,7 @@ function RegistrationStageScreen({
   const canCreateTeams = registrationComplete && participantCountIsEven;
   const teamsReady =
     state.teams.length === state.config.teamCount &&
-    state.teams.every((team) => isTeamComplete(team));
+    state.teams.every((team) => isTeamComplete(team) && team.confirmed);
   const assignedParticipantIds = useMemo(
     () => getAssignedParticipantIds(state.teams),
     [state.teams],
@@ -1171,6 +1185,31 @@ function RegistrationStageScreen({
     state.teamCreationMode === "manual" && pickerTeam ? manualPicker : null;
   const startTimerRef = useRef<number | null>(null);
   const [launchFxVisible, setLaunchFxVisible] = useState(false);
+  const [editingBotId, setEditingBotId] = useState<string | null>(null);
+  const [editingBotName, setEditingBotName] = useState("");
+  const activeEditingBot = editingBotId
+    ? state.participants.find((participant) => participant.id === editingBotId) ?? null
+    : null;
+
+  useEffect(() => {
+    if (!editingBotId) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setEditingBotId(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [editingBotId]);
+
+  function openBotEditor(participant: Participant): void {
+    setEditingBotId(participant.id);
+    setEditingBotName(participant.name);
+  }
 
   useEffect(() => {
     if (!launchFxVisible) {
@@ -1213,7 +1252,8 @@ function RegistrationStageScreen({
     <>
       <ScreenFrame
         eyebrow="Paso 3 · Registro y parejas"
-        title="Registra a los jugadores y monta las parejas"
+        title="Registro y parejas"
+        activeUrl={state.config.publicBaseUrl}
         leftSlot={<BackButton label="Volver a configuración" onClick={onBack} />}
         rightSlot={
           <div className="flex flex-wrap gap-2">
@@ -1223,7 +1263,7 @@ function RegistrationStageScreen({
           </div>
         }
       >
-        <div className="space-y-6">
+        <div className="registration-dashboard grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
           <section
             className={`launch-panel ${teamsReady ? "launch-panel-ready" : "launch-panel-blocked"} ${
               launchFxVisible ? "launch-panel-firing" : ""
@@ -1231,29 +1271,23 @@ function RegistrationStageScreen({
           >
             <div className="launch-panel-orb launch-panel-orb-left" />
             <div className="launch-panel-orb launch-panel-orb-right" />
-            <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="relative z-10 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="max-w-3xl">
-                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[#9ee5ff]">
-                  Lanzamiento del torneo
-                </p>
-                <h2 className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-white md:text-4xl">
+                <div className="flex items-center gap-2">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--accent)]">
+                    Lanzamiento del torneo
+                  </p>
+                  <InfoHint label="El botón se activa cuando todas las parejas están completas." />
+                </div>
+                <h2 className="mt-2 text-2xl font-semibold tracking-normal text-[var(--foreground)] md:text-3xl">
                   {teamsReady
                     ? "Todo está listo para abrir la primera fase."
                     : "Cierra primero todas las parejas para poder arrancar."}
                 </h2>
-                {!(teamsReady && structure.entryStage === "swiss") ? (
-                  <p className="mt-3 text-sm leading-7 text-white/62 md:text-base">
-                    {teamsReady
-                      ? structure.entryStage === "semifinals"
-                        ? "Al pulsar se preparan directamente las semifinales y la mesa salta al cuadro eliminatorio."
-                        : "Al pulsar se abre la final directa y la mesa entra ya en la pantalla de resultado."
-                      : "Este botón se activará en cuanto todas las plazas estén completas y todas las parejas tengan sus dos integrantes."}
-                  </p>
-                ) : null}
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <StageBadge
-                    label={`${state.teams.filter((team) => isTeamComplete(team)).length}/${state.config.teamCount} parejas listas`}
+                    label={`${state.teams.filter((team) => isTeamComplete(team) && team.confirmed).length}/${state.config.teamCount} parejas aceptadas`}
                   />
                   <StageBadge
                     label={
@@ -1275,10 +1309,10 @@ function RegistrationStageScreen({
               >
                 <span className="launch-button-core" />
                 <span className="relative z-10 flex flex-col items-center">
-                  <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/74">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">
                     {isPending ? "Preparando" : "Acción principal"}
                   </span>
-                  <span className="mt-1 text-lg font-semibold tracking-[0.02em] text-white">
+                  <span className="mt-1 text-lg font-semibold tracking-[0.02em] text-[var(--foreground)]">
                     {isPending ? "Montando cuadro..." : "Empezar torneo"}
                   </span>
                 </span>
@@ -1286,51 +1320,51 @@ function RegistrationStageScreen({
             </div>
           </section>
 
-          <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-            <div className="space-y-6">
+          <div className="grid min-h-0 gap-3 overflow-hidden xl:grid-cols-[minmax(416px,0.57fr)_minmax(0,1.43fr)] 2xl:grid-cols-[minmax(466px,0.52fr)_minmax(0,1.48fr)]">
+            <div className="min-h-0 space-y-3 overflow-hidden">
               <RegistrationQrCard registrationUrl={registrationUrl} />
 
-              <section className="rounded-[30px] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+              <section className="registration-status-card rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                       Estado del registro
                     </p>
-                    <h3 className="mt-2 text-2xl font-semibold text-white">
+                    <h3 className="mt-1 text-xl font-semibold text-[var(--foreground)]">
                       {registrationComplete
                         ? "Ya están todos los jugadores"
                         : `Faltan ${remainingCount} personas por entrar`}
                     </h3>
                   </div>
-                  <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                  <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
                     {participantCountIsEven ? "conteo par" : "conteo impar"}
                   </span>
                 </div>
 
-                <div className="mt-5 grid gap-4 md:grid-cols-3">
-                  <div className="rounded-[22px] border border-white/10 bg-[#0b1320] p-4">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                  <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-2.5">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                       Registrados
                     </p>
-                    <p className="mt-3 text-3xl font-semibold text-white">{registeredCount}</p>
+                    <p className="mt-2 text-2xl font-semibold text-[var(--foreground)]">{registeredCount}</p>
                   </div>
-                  <div className="rounded-[22px] border border-white/10 bg-[#0b1320] p-4">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                  <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-2.5">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                       Objetivo
                     </p>
-                    <p className="mt-3 text-3xl font-semibold text-white">{expectedParticipants}</p>
+                    <p className="mt-2 text-2xl font-semibold text-[var(--foreground)]">{expectedParticipants}</p>
                   </div>
-                  <div className="rounded-[22px] border border-white/10 bg-[#0b1320] p-4">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                  <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-2.5">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                       Parejas listas
                     </p>
-                    <p className="mt-3 text-3xl font-semibold text-white">
-                      {state.teams.filter((team) => isTeamComplete(team)).length}
+                    <p className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+                      {state.teams.filter((team) => isTeamComplete(team) && team.confirmed).length}
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-5 flex flex-wrap gap-3">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={onAddBotParticipant}
@@ -1357,7 +1391,7 @@ function RegistrationStageScreen({
                   </button>
                 </div>
 
-                <div className="mt-5 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <StageBadge label={formatTournamentFormatLabel(state.config.format)} />
                   <StageBadge
                     label={
@@ -1371,7 +1405,7 @@ function RegistrationStageScreen({
                 </div>
 
                 {!canCreateTeams ? (
-                  <div className="mt-5 rounded-[20px] border border-white/10 bg-[#0b1320] px-4 py-3 text-sm leading-6 text-white/68">
+                  <div className="mt-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
                     {registeredCount === 0
                       ? "Todavía no se ha registrado nadie."
                       : !participantCountIsEven
@@ -1384,75 +1418,74 @@ function RegistrationStageScreen({
               </section>
             </div>
 
-            <div>
+            <div className="min-h-0 overflow-hidden">
               {state.teamCreationMode === "pending" ? (
-                <section className="rounded-[30px] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+                <section className="flex h-full min-h-0 flex-col rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                         Personas registradas
                       </p>
-                      <h3 className="mt-2 text-2xl font-semibold text-white">
+                      <h3 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
                         Van apareciendo en directo
                       </h3>
                     </div>
-                    <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-white/62">
+                    <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
                       {registeredCount}/{expectedParticipants}
                     </span>
                   </div>
 
-                  <div className="mt-5 grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
+                  <div className="mt-4 grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fit,minmax(145px,1fr))] gap-3 overflow-y-auto overflow-x-hidden pr-2">
                     {state.participants.map((participant) => (
                       <ParticipantCard
                         key={participant.id}
                         participant={participant}
                         dimmed={assignedParticipantIds.has(participant.id)}
-                        canRename={participant.deviceId.startsWith("bot-")}
-                        onRename={onRenameParticipant}
-                        isRenaming={renamingParticipantId === participant.id}
+                        canEdit={participant.deviceId.startsWith("bot-")}
+                        onEdit={openBotEditor}
                       />
                     ))}
                     {state.participants.length === 0 ? (
-                      <div className="rounded-[22px] border border-dashed border-white/12 bg-[#0b1320] px-5 py-8 text-sm leading-7 text-white/48 md:col-span-2 2xl:col-span-3">
+                      <div className="rounded-[8px] border border-dashed border-[var(--stroke)] bg-[var(--surface-strong)] px-5 py-8 text-sm leading-7 text-[var(--muted-soft)] md:col-span-2 2xl:col-span-3">
                         En cuanto los móviles empiecen a escanear el QR, aquí aparecerán sus nombres y fotos.
                       </div>
                     ) : null}
                   </div>
                 </section>
               ) : (
-                <section className="rounded-[30px] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+                <section className="flex h-full min-h-0 flex-col rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                         Parejas resultantes
                       </p>
-                      <h3 className="mt-2 text-2xl font-semibold text-white">
+                      <h3 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
                         Vista previa antes de pasar al torneo
                       </h3>
                       {state.teamCreationMode === "manual" ? (
-                        <p className="mt-2 text-sm leading-6 text-white/58">
-                          Pulsa cada plaza y elige a la persona entre las que siguen libres.
-                        </p>
+                        <div className="mt-2 flex items-center gap-2">
+                          <InfoHint label="Pulsa una plaza libre para elegir una persona disponible." />
+                        </div>
                       ) : null}
                     </div>
                     <StageBadge label={`${state.teams.length}/${state.config.teamCount} parejas`} />
                   </div>
 
-                  <div className="mt-5 grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+                  <div className="mt-4 grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-3 overflow-y-auto overflow-x-hidden pr-2">
                     {state.teams.map((team) => (
                       <div
                         key={`preview-top-${team.id}`}
-                        className="rounded-[24px] border border-white/10 bg-[#0b1320] p-4"
+                        className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-3"
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div>
-                            <p className="text-lg font-semibold text-white">
+                            <p className="text-lg font-semibold text-[var(--foreground)]">
                               {team.nameIsCustom ? team.name : team.label}
                             </p>
                           </div>
                           {state.teamCreationMode === "manual" ? (
-                            <span className="rounded-full border border-white/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[#77cfff]">
-                              seleccionar
+                            <span className="rounded-full border border-[var(--stroke)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
+                              {getTeamConfirmationLabel(team)}
                             </span>
                           ) : null}
                         </div>
@@ -1469,6 +1502,20 @@ function RegistrationStageScreen({
                               slot="B"
                               onOpen={(teamId, slot) => setManualPicker({ teamId, slot })}
                             />
+                            {isTeamComplete(team) && !team.confirmed ? (
+                              <button
+                                type="button"
+                                onClick={() => onConfirmManualTeam(team.id)}
+                                disabled={isPending}
+                                className="button-primary w-full"
+                              >
+                                Aceptar pareja
+                              </button>
+                            ) : team.confirmed ? (
+                              <div className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
+                                Pareja aceptada
+                              </div>
+                            ) : null}
                         </div>
                       ) : (
                         <StepPreviewTeamSummary team={team} />
@@ -1482,13 +1529,13 @@ function RegistrationStageScreen({
           </div>
 
           {state.teams.length > 0 && state.teamCreationMode === "pending" ? (
-            <section className="rounded-[30px] border border-white/10 bg-white/[0.04] p-5 backdrop-blur">
+            <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-5">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                     Parejas resultantes
                   </p>
-                  <h3 className="mt-2 text-2xl font-semibold text-white">
+                  <h3 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
                     Vista previa antes de pasar al torneo
                   </h3>
                 </div>
@@ -1499,11 +1546,11 @@ function RegistrationStageScreen({
                 {state.teams.map((team) => (
                   <div
                     key={`preview-${team.id}`}
-                    className="rounded-[24px] border border-white/10 bg-[#0b1320] p-4"
+                    className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-lg font-semibold text-white">
+                        <p className="text-lg font-semibold text-[var(--foreground)]">
                           {team.nameIsCustom ? team.name : team.label}
                         </p>
                       </div>
@@ -1515,35 +1562,121 @@ function RegistrationStageScreen({
             </section>
           ) : null}
 
-          {feedback ? (
-            <div
-              className={`rounded-[20px] border px-4 py-3 text-sm leading-6 ${
-                feedback.tone === "success"
-                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
-                  : "border-rose-500/20 bg-rose-500/10 text-rose-200"
-              }`}
-            >
-              {feedback.text}
-            </div>
-          ) : null}
         </div>
       </ScreenFrame>
+      <FeedbackToast feedback={feedback} />
+
+      {activeEditingBot ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm"
+          onClick={() => setEditingBotId(null)}
+        >
+          <form
+            className="w-full max-w-md rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5 shadow-[0_30px_120px_rgba(0,0,0,0.45)]"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const trimmedName = editingBotName.trim();
+
+              if (!trimmedName) {
+                return;
+              }
+
+              onRenameParticipant(activeEditingBot.id, trimmedName);
+              setEditingBotId(null);
+            }}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--accent)]">
+                  Editar bot
+                </p>
+                <h3 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+                  {activeEditingBot.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingBotId(null)}
+                className="button-secondary px-3"
+                aria-label="Cerrar edición de bot"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="mt-5 flex items-center gap-4 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-3">
+              <div className="h-14 w-14 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
+                <img
+                  src={activeEditingBot.photoUrl}
+                  alt={activeEditingBot.name}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--muted-soft)]">
+                  Bot de prueba
+                </p>
+                <p className="mt-1 truncate text-sm font-semibold text-[var(--foreground)]">
+                  alta {formatSyncTime(activeEditingBot.registeredAt)}
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-5 block">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                Nombre visible
+              </span>
+              <input
+                value={editingBotName}
+                onChange={(event) => setEditingBotName(event.target.value)}
+                className="input-shell mt-2 w-full"
+                autoFocus
+                maxLength={36}
+              />
+            </label>
+
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteBotParticipant(activeEditingBot.id);
+                  setEditingBotId(null);
+                }}
+                disabled={deletingParticipantId === activeEditingBot.id}
+                className="button-secondary border-red-500/40 text-red-200 hover:border-red-400/70"
+              >
+                {deletingParticipantId === activeEditingBot.id ? "Eliminando..." : "Eliminar"}
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  renamingParticipantId === activeEditingBot.id ||
+                  editingBotName.trim().length === 0
+                }
+                className="button-primary"
+              >
+                {renamingParticipantId === activeEditingBot.id ? "Guardando..." : "Guardar"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {activeManualPicker && pickerTeam ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
-          <div className="max-h-[88vh] w-full max-w-3xl overflow-auto rounded-[30px] border border-white/10 bg-[#08111d] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
+          <div className="max-h-[88vh] w-full max-w-3xl overflow-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <p className="font-mono text-xs uppercase tracking-[0.24em] text-[#77cfff]">
-                  Selección manual
-                </p>
-                <h3 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-white">
+                <div className="flex items-center gap-2">
+                  <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--accent)]">
+                    Selección manual
+                  </p>
+                  <InfoHint label="Elige una persona libre para esta plaza o libera la plaza actual." />
+                </div>
+                <h3 className="mt-2 text-3xl font-semibold tracking-normal text-[var(--foreground)]">
                   {pickerTeam.label} · plaza {activeManualPicker.slot}
                 </h3>
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-white/62">
-                  Elige a una persona libre para esta plaza. Si ya había alguien dentro,
-                  también puedes liberar el hueco o dejar a la misma persona.
-                </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -1561,12 +1694,12 @@ function RegistrationStageScreen({
             </div>
 
             {pickerPlayer?.participantId ? (
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3">
                 <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-white/42">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted-soft)]">
                     Plaza actual
                   </p>
-                  <p className="mt-1 text-base font-semibold text-white">{pickerPlayer.name}</p>
+                  <p className="mt-1 text-base font-semibold text-[var(--foreground)]">{pickerPlayer.name}</p>
                 </div>
                 <button
                   type="button"
@@ -1598,14 +1731,14 @@ function RegistrationStageScreen({
                       );
                       setManualPicker(null);
                     }}
-                    className={`rounded-[24px] border p-4 text-left transition ${
+                    className={`rounded-[8px] border p-4 text-left transition ${
                       isCurrent
-                        ? "border-[#6dd1ff]/40 bg-[#0c1a29]"
-                        : "border-white/10 bg-white/[0.03] hover:border-white/24"
+                        ? "border-[var(--accent-border)] bg-[var(--accent-soft)]"
+                        : "border-[var(--stroke)] bg-[var(--surface-strong)] hover:border-[var(--accent-border)]"
                     }`}
                   >
                     <div className="flex items-center gap-4">
-                      <div className="h-16 w-16 overflow-hidden rounded-full border border-white/10 bg-[#11253d]">
+                      <div className="h-16 w-16 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
                         <img
                           src={participant.photoUrl}
                           alt={participant.name}
@@ -1614,21 +1747,21 @@ function RegistrationStageScreen({
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="truncate text-lg font-semibold text-white">
+                          <p className="truncate text-lg font-semibold text-[var(--foreground)]">
                             {participant.name}
                           </p>
                           {participant.deviceId.startsWith("bot-") ? (
-                            <span className="rounded-full border border-white/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-[#77cfff]">
+                            <span className="rounded-full border border-[var(--stroke)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-[var(--accent)]">
                               bot
                             </span>
                           ) : null}
                           {isCurrent ? (
-                            <span className="rounded-full border border-[#6dd1ff]/24 bg-[#6dd1ff]/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-[#9ee5ff]">
+                            <span className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-[var(--accent)]">
                               actual
                             </span>
                           ) : null}
                         </div>
-                        <p className="mt-1 text-xs text-white/42">
+                        <p className="mt-1 text-xs text-[var(--muted-soft)]">
                           alta {formatSyncTime(participant.registeredAt)}
                         </p>
                       </div>
@@ -1638,7 +1771,7 @@ function RegistrationStageScreen({
               })}
 
               {pickerOptions.length === 0 ? (
-                <div className="rounded-[24px] border border-dashed border-white/12 bg-[#0b1320] px-5 py-8 text-sm leading-7 text-white/48 md:col-span-2">
+                <div className="rounded-[8px] border border-dashed border-[var(--stroke)] bg-[var(--surface-strong)] px-5 py-8 text-sm leading-7 text-[var(--muted-soft)] md:col-span-2">
                   Ya no quedan personas libres por asignar. Si quieres cambiar esta plaza,
                   primero libera alguna otra o usa la opción de liberar aquí.
                 </div>
@@ -1673,14 +1806,14 @@ function MatchTile({
 
   if (match.bye && teamA) {
     return (
-      <div className="rounded-[18px] border border-white/18 bg-white/[0.03] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[#77cfff]">
+      <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
           mesa {match.table}
         </p>
         <div className="mt-3 flex flex-col items-center text-center">
           <TeamFaces team={teamA} size="lg" />
-          <p className="mt-4 text-base font-semibold text-white">{teamA.name}</p>
-          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[#77cfff]">
+          <p className="mt-4 text-base font-semibold text-[var(--foreground)]">{teamA.name}</p>
+          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
             bye automático
           </p>
         </div>
@@ -1696,13 +1829,13 @@ function MatchTile({
     <button
       type="button"
       onClick={() => onOpen(match.id)}
-      className="w-full rounded-[18px] border border-white/18 bg-white/[0.03] p-4 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-white/28 hover:bg-white/[0.05]"
+      className="w-full rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]"
     >
       <div className="flex items-center justify-between gap-3">
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[#77cfff]">
+        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
           mesa {match.table}
         </p>
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/42">
+        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
           {match.status === "completed"
             ? `${pointsOnlyMode ? match.score?.teamA.points ?? 0 : match.score?.teamA.vacas ?? 0}-${pointsOnlyMode ? match.score?.teamB.points ?? 0 : match.score?.teamB.vacas ?? 0}`
             : "pendiente"}
@@ -1716,7 +1849,7 @@ function MatchTile({
         ].map(({ team, side, score }, index) => (
           <div key={team.id}>
             <div
-              className={`grid w-full max-w-full min-w-0 items-center gap-3 overflow-hidden rounded-[16px] px-3 py-2 ${
+              className={`grid w-full max-w-full min-w-0 items-center gap-3 overflow-hidden rounded-[8px] px-3 py-2 ${
                 side === "left"
                   ? "grid-cols-[minmax(0,1fr)_50px]"
                   : "grid-cols-[50px_minmax(0,1fr)]"
@@ -1745,23 +1878,23 @@ function MatchTile({
                                 match.status === "completed" &&
                                 match.loserId === team.id
                               ? "text-rose-100"
-                              : "text-white"
+                              : "text-[var(--foreground)]"
                         }`}
                       >
                         {team.name}
                       </p>
-                      <p className="truncate text-[11px] text-white/40">
+                      <p className="truncate text-[11px] text-[var(--muted-soft)]">
                         {playerName(team, 0)} · {playerName(team, 1)}
                       </p>
                     </div>
                   </div>
-                  <div className="flex h-10 min-w-[50px] flex-none items-center justify-center rounded-[10px] border border-white/40 bg-black px-3 font-mono text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                  <div className="flex h-10 min-w-[50px] flex-none items-center justify-center rounded-[8px] border border-[var(--accent-border)] bg-[var(--background)] px-3 font-mono text-base font-extrabold text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
                     {score}
                   </div>
                 </>
               ) : (
                 <>
-                  <div className="flex h-10 min-w-[50px] flex-none items-center justify-center rounded-[10px] border border-white/40 bg-black px-3 font-mono text-base font-extrabold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                  <div className="flex h-10 min-w-[50px] flex-none items-center justify-center rounded-[8px] border border-[var(--accent-border)] bg-[var(--background)] px-3 font-mono text-base font-extrabold text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
                     {score}
                   </div>
                   <div className="min-w-0 overflow-hidden text-right">
@@ -1777,12 +1910,12 @@ function MatchTile({
                                 match.status === "completed" &&
                                 match.loserId === team.id
                               ? "text-rose-100"
-                              : "text-white"
+                              : "text-[var(--foreground)]"
                         }`}
                       >
                         {team.name}
                       </p>
-                      <p className="truncate text-[11px] text-white/40">
+                      <p className="truncate text-[11px] text-[var(--muted-soft)]">
                         {playerName(team, 0)} · {playerName(team, 1)}
                       </p>
                     </div>
@@ -1793,11 +1926,11 @@ function MatchTile({
 
             {index === 0 ? (
               <div className="mt-3 flex items-center gap-3">
-                <div className="h-[2px] flex-1 bg-white/20" />
-                <div className="rounded-full border border-white/10 bg-white/6 px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-white/46">
+                <div className="h-[2px] flex-1 bg-[rgba(244,247,239,0.20)]" />
+                <div className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                   vs
                 </div>
-                <div className="h-[2px] flex-1 bg-white/20" />
+                <div className="h-[2px] flex-1 bg-[rgba(244,247,239,0.20)]" />
               </div>
             ) : null}
           </div>
@@ -1838,14 +1971,14 @@ function MatchResultTeamCard({
       ] as const);
 
   return (
-    <div className="flex h-full min-h-[420px] flex-col justify-between rounded-[24px] border border-white/10 bg-black/55 p-5">
+    <div className="flex h-full min-h-[420px] flex-col justify-between rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-5">
       <div className="flex flex-col items-center text-center">
         <TeamFaces team={team} size="xl" />
-        <p className="mt-5 text-2xl font-semibold text-white">{team.name}</p>
-        <p className="mt-2 text-sm text-white/42">
+        <p className="mt-5 text-2xl font-semibold text-[var(--foreground)]">{team.name}</p>
+        <p className="mt-2 text-sm text-[var(--muted-soft)]">
           {playerName(team, 0)} · {playerName(team, 1)}
         </p>
-        <span className="mt-4 rounded-full border border-white/10 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[#77cfff]">
+        <span className="mt-4 rounded-full border border-[var(--stroke)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
           {team.wins}-{team.losses}
         </span>
       </div>
@@ -1853,7 +1986,7 @@ function MatchResultTeamCard({
       <div className={`mt-8 ${pointsOnlyMode ? "grid gap-3" : "grid grid-cols-3 gap-3"}`}>
         {scoreFields.map(([field, label]) => (
           <label key={field} className="block">
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
               {label}
             </span>
             <input
@@ -1878,8 +2011,8 @@ function MatchResultTeamCard({
                 )
               }
               maxLength={pointsOnlyMode ? 2 : undefined}
-              className="input-shell mt-2 !bg-[#101a2d] !text-white text-center text-xl font-semibold placeholder:!text-white/25 [appearance:textfield]"
-              style={{ WebkitTextFillColor: "#ffffff" }}
+              className="input-shell mt-2 !bg-[var(--surface-inset)] !text-[var(--foreground)] text-center text-xl font-semibold placeholder:!text-[var(--muted-soft)] [appearance:textfield]"
+              style={{ WebkitTextFillColor: "var(--foreground)" }}
             />
           </label>
         ))}
@@ -1966,13 +2099,13 @@ function SwissStageScreen({
     : null;
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#020409] text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.14),_transparent_24%),radial-gradient(circle_at_84%_12%,_rgba(99,102,241,0.16),_transparent_22%),linear-gradient(180deg,#03060b_0%,#02040a_100%)]" />
+    <div className="relative min-h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.05)_0%,transparent_30%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         {columns.map((column) => (
           <div
             key={`ghost-${column.depth}`}
-            className="absolute top-8 text-[28rem] font-black leading-none tracking-[-0.08em] text-white/[0.035]"
+            className="absolute top-8 text-[28rem] font-black leading-none tracking-normal text-[rgba(124,255,79,0.06)]"
             style={{ left: `${column.depth * 18 + 1}rem` }}
           >
             {column.depth}
@@ -1980,65 +2113,60 @@ function SwissStageScreen({
         ))}
       </div>
 
-      <main className="relative mx-auto flex min-h-screen max-w-[1880px] flex-col px-4 py-5 md:px-8 md:py-8">
-        <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <main className="relative mx-auto flex h-full max-w-[1880px] flex-col overflow-hidden px-4 py-4 md:px-6 md:py-5">
+        <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <BackButton label="Volver al registro" onClick={onBack} />
-            <p className="mt-5 font-mono text-xs uppercase tracking-[0.28em] text-[#77cfff]">
-              Paso 4 · Swiss Stage
-            </p>
-            <h1 className="mt-2 text-5xl font-black tracking-[-0.07em] text-white md:text-8xl">
+            <div className="mt-3 flex items-center gap-2">
+              <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--accent)]">
+                Paso 4 · Swiss Stage
+              </p>
+              <InfoHint label="Sortea cada tramo y abre solo la mesa que quieras cerrar." />
+            </div>
+            <h1 className="mt-1 text-[clamp(2.8rem,6vw,6.5rem)] font-black leading-[0.9] tracking-normal text-[var(--foreground)]">
               SWISS STAGE
             </h1>
-            <p className="mt-3 max-w-2xl text-sm leading-7 text-white/62 md:text-base">
-              Cada tramo se sortea con su botón. Después pinchas solo la mesa que quieras
-              abrir para meter el resultado sin desplegar el resto.
-            </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <StageBadge label={`Ronda ${state.currentSwissRound}`} />
-            <StageBadge label={`Sync ${formatSyncTime(state.updatedAt)}`} />
-            <StageBadge label={state.config.title} />
+          <div className="flex min-h-full flex-col items-end justify-between gap-4 text-right">
+            <div className="flex flex-wrap justify-end gap-2">
+              <StageBadge label={`Ronda ${state.currentSwissRound}`} />
+              <StageBadge label={`Sync ${formatSyncTime(state.updatedAt)}`} />
+              <StageBadge label={state.config.title} />
+            </div>
+            <div className="max-w-[min(44vw,620px)]">
+              <p className="truncate font-mono text-[9px] uppercase tracking-[0.18em] text-[rgba(242,247,238,0.46)]">
+                URL activa · {state.config.publicBaseUrl || "sin definir"}
+              </p>
+              <AdminCredit />
+            </div>
           </div>
         </header>
 
-        {feedback ? (
-          <section
-            className={`mt-5 rounded-[20px] border px-4 py-3 text-sm leading-6 ${
-              feedback.tone === "success"
-                ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
-                : "border-rose-500/20 bg-rose-500/10 text-rose-200"
-            }`}
-          >
-            {feedback.text}
-          </section>
-        ) : null}
-
-        <section className="mt-5 flex flex-wrap items-center gap-3 rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[#77cfff]">
+        <section className="mt-3 flex flex-wrap items-center gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-2">
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--accent)]">
             Estado de la ronda
           </span>
-          <div className="h-px w-8 bg-white/12" />
-          <p className="text-sm text-white/74 md:text-base">
+          <div className="h-px w-8 bg-[rgba(244,247,239,0.12)]" />
+          <p className="text-sm text-[var(--muted)] md:text-base">
             Quedan{" "}
-            <span className="font-semibold text-white">{pendingMatchesCount}</span>{" "}
+            <span className="font-semibold text-[var(--foreground)]">{pendingMatchesCount}</span>{" "}
             enfrentamientos por cerrar en esta fase.
           </p>
         </section>
 
-        <section className="mt-6 flex-1 overflow-x-auto pb-6">
-          <div className="flex min-w-max gap-10 pr-8">
+        <section className="mt-4 min-h-0 flex-1 overflow-hidden">
+          <div className="flex h-full min-w-0 gap-4 overflow-hidden pr-2">
             {columns.map((column) => (
-              <div key={column.depth} className="w-[320px] flex-none">
-                <div className="mb-4 flex items-center justify-between">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-white/36">
+              <div key={column.depth} className="flex h-full w-[clamp(210px,16vw,300px)] flex-none flex-col">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted-soft)]">
                     tramo {column.depth}
                   </p>
-                  <div className="h-px flex-1 bg-white/10" />
+                  <div className="h-px flex-1 bg-[rgba(244,247,239,0.10)]" />
                 </div>
 
-                <div className="space-y-5">
+                <div className="min-h-0 flex-1 space-y-3 overflow-hidden">
                   {column.boxes.map((box) => {
                     const hasContent = box.matches.length > 0 || box.teams.length > 0;
                     const shouldShowDrawButton =
@@ -2049,17 +2177,17 @@ function SwissStageScreen({
                     return (
                       <div
                         key={box.label}
-                        className={`relative overflow-hidden rounded-[24px] border ${
+                        className={`relative overflow-hidden rounded-[8px] border ${
                           box.isEditable
-                            ? "border-[#6dd1ff] shadow-[0_18px_60px_rgba(14,165,233,0.16)]"
-                            : "border-white/10"
-                        } ${hasContent ? "bg-black/88" : "bg-black/50"}`}
+                            ? "border-[var(--accent)] shadow-[0_18px_48px_rgba(124,255,79,0.14)]"
+                            : "border-[var(--stroke)]"
+                        } ${hasContent ? "bg-[var(--surface-inset)]" : "bg-[rgba(11,16,12,0.72)]"}`}
                       >
                         <div
                           className={`flex items-center justify-between border-b px-4 py-3 ${
                             box.isEditable
-                              ? "border-[#6dd1ff]/40 bg-[linear-gradient(90deg,#5b8cff,#7d6dff)] text-white"
-                              : "border-white/10 bg-white text-black"
+                              ? "border-[var(--accent-border)] bg-[linear-gradient(90deg,#7cff4f,#a6ff82)] text-[var(--accent-ink)]"
+                              : "border-[var(--stroke)] bg-[#f4f7ef] text-[var(--background)]"
                           }`}
                         >
                           <span className="font-mono text-lg font-semibold tracking-[0.12em]">
@@ -2076,9 +2204,9 @@ function SwissStageScreen({
                           </span>
                         </div>
 
-                        <div className="min-h-[260px] p-4">
+                        <div className="min-h-[clamp(120px,18vh,220px)] p-3">
                           {box.revealedMatches.length > 0 ? (
-                            <div className="space-y-3">
+                            <div className="space-y-2">
                               {box.revealedMatches.map((match) => (
                                 <MatchTile
                                   key={match.id}
@@ -2090,25 +2218,25 @@ function SwissStageScreen({
                               ))}
                             </div>
                           ) : box.teams.length > 0 ? (
-                            <div className="space-y-3">
+                            <div className="space-y-2">
                               {box.teams.map((team, index) => (
                                 <div
                                   key={team.id}
-                                  className="stagger-rise flex items-center justify-between gap-3 rounded-[18px] border border-white/10 bg-white/[0.03] px-4 py-3"
+                                  className="stagger-rise flex items-center justify-between gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3"
                                   style={{ animationDelay: `${index * 70}ms` }}
                                 >
                                   <div className="flex min-w-0 items-center gap-4">
                                     <TeamFaces team={team} size="md" />
                                     <div className="min-w-0">
-                                      <p className="truncate text-base font-semibold text-white">
+                                      <p className="truncate text-base font-semibold text-[var(--foreground)]">
                                         {team.name}
                                       </p>
-                                      <p className="truncate text-[11px] text-white/42">
+                                      <p className="truncate text-[11px] text-[var(--muted-soft)]">
                                         {playerName(team, 0)} · {playerName(team, 1)}
                                       </p>
                                     </div>
                                   </div>
-                                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[#77cfff]">
+                                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
                                     {team.wins}-{team.losses}
                                   </span>
                                 </div>
@@ -2125,7 +2253,7 @@ function SwissStageScreen({
                               ) : null}
                             </div>
                           ) : (
-                            <div className="flex min-h-[228px] items-center justify-center text-center text-sm leading-7 text-white/20">
+                            <div className="flex min-h-[clamp(100px,15vh,180px)] items-center justify-center text-center text-sm leading-6 text-[var(--muted-soft)]">
                               Caja preparada para este balance.
                             </div>
                           )}
@@ -2139,7 +2267,7 @@ function SwissStageScreen({
           </div>
         </section>
 
-        <footer className="sticky bottom-0 mt-2 flex flex-wrap items-center justify-between gap-4 rounded-[28px] border border-white/10 bg-black/70 px-5 py-4 backdrop-blur">
+        <footer className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.86)] px-4 py-3">
           <div className="flex flex-wrap gap-2">
             <StageBadge label={`${currentRoundMatches.length} enfrentamientos`} />
             <StageBadge
@@ -2168,16 +2296,20 @@ function SwissStageScreen({
           </div>
         </footer>
       </main>
+      <FeedbackToast feedback={feedback} />
 
       {activeMatch && activeTeams?.teamA && activeTeams.teamB ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
-          <div className="max-h-[88vh] w-full max-w-6xl overflow-auto rounded-[30px] border border-white/10 bg-[#08111d] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
+          <div className="max-h-[88vh] w-full max-w-6xl overflow-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <p className="font-mono text-xs uppercase tracking-[0.24em] text-[#77cfff]">
-                  Mesa activa
-                </p>
-                <h2 className="mt-2 text-4xl font-semibold tracking-[-0.05em] text-white">
+                <div className="flex items-center gap-2">
+                  <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--accent)]">
+                    Mesa activa
+                  </p>
+                  <InfoHint label="Introduce el marcador de cada pareja y guarda el resultado de esta mesa." />
+                </div>
+                <h2 className="mt-2 text-4xl font-semibold tracking-normal text-[var(--foreground)]">
                   {activeMatch.bracketLabel} · mesa {activeMatch.table}
                 </h2>
               </div>
@@ -2186,7 +2318,7 @@ function SwissStageScreen({
               </button>
             </div>
 
-            <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
+            <article className="mt-6 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_110px_minmax(0,1fr)] lg:items-stretch">
                 <MatchResultTeamCard
                   match={activeMatch}
@@ -2199,7 +2331,7 @@ function SwissStageScreen({
                 />
 
                 <div className="flex items-center justify-center">
-                  <div className="rounded-full border border-white/10 bg-white/6 px-6 py-5 text-center font-mono text-sm uppercase tracking-[0.22em] text-white/46">
+                  <div className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-6 py-5 text-center font-mono text-sm uppercase tracking-[0.22em] text-[var(--muted-soft)]">
                     vs
                   </div>
                 </div>
@@ -2292,16 +2424,13 @@ function PlayoffStageScreen({
     : null;
   const isSemifinals = state.stage === "semifinals";
   const title = isSemifinals ? "SEMIFINALES" : "FINAL";
-  const description = isSemifinals
-    ? "La clasificación ya ha decidido esta fase. Abre solo la mesa que quieras cerrar y, cuando estén todas completas, pasa a la final."
-    : "Aquí se cierra el último enfrentamiento del torneo. Cuando la final esté completa podrás dejar el torneo terminado.";
   const advanceLabel = isSemifinals ? "Pasar a la final" : "Cerrar torneo";
 
   return (
     <ScreenFrame
       eyebrow={isSemifinals ? "Fase final · Semifinales" : "Fase final · Final"}
       title={title}
-      description={description}
+      activeUrl={state.config.publicBaseUrl}
       leftSlot={<BackButton label="Volver a configuración" onClick={onBack} />}
       rightSlot={
         <div className="flex flex-wrap gap-2">
@@ -2312,26 +2441,14 @@ function PlayoffStageScreen({
       }
     >
       <div className="space-y-6">
-        {feedback ? (
-          <section
-            className={`rounded-[20px] border px-4 py-3 text-sm leading-6 ${
-              feedback.tone === "success"
-                ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
-                : "border-rose-500/20 bg-rose-500/10 text-rose-200"
-            }`}
-          >
-            {feedback.text}
-          </section>
-        ) : null}
-
-        <section className="flex flex-wrap items-center gap-3 rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[#77cfff]">
+        <section className="flex flex-wrap items-center gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3">
+          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--accent)]">
             Estado de la fase
           </span>
-          <div className="h-px w-8 bg-white/12" />
-          <p className="text-sm text-white/74 md:text-base">
+          <div className="h-px w-8 bg-[rgba(244,247,239,0.12)]" />
+          <p className="text-sm text-[var(--muted)] md:text-base">
             Quedan{" "}
-            <span className="font-semibold text-white">{pendingMatchesCount}</span>{" "}
+            <span className="font-semibold text-[var(--foreground)]">{pendingMatchesCount}</span>{" "}
             enfrentamientos por cerrar.
           </p>
         </section>
@@ -2348,7 +2465,7 @@ function PlayoffStageScreen({
           ))}
         </section>
 
-        <footer className="flex flex-wrap items-center justify-between gap-4 rounded-[28px] border border-white/10 bg-black/40 px-5 py-4 backdrop-blur">
+        <footer className="flex flex-wrap items-center justify-between gap-4 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.82)] px-5 py-4">
           <div className="flex flex-wrap gap-2">
             <StageBadge label={`${currentMatches.length} enfrentamientos`} />
             <StageBadge label={roundComplete ? "fase cerrada" : "faltan resultados"} />
@@ -2371,14 +2488,17 @@ function PlayoffStageScreen({
       </div>
 
       {activeMatch && activeTeams?.teamA && activeTeams.teamB ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
-          <div className="max-h-[88vh] w-full max-w-6xl overflow-auto rounded-[30px] border border-white/10 bg-[#08111d] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
+          <div className="max-h-[88vh] w-full max-w-6xl overflow-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <p className="font-mono text-xs uppercase tracking-[0.24em] text-[#77cfff]">
-                  Mesa activa
-                </p>
-                <h2 className="mt-2 text-4xl font-semibold tracking-[-0.05em] text-white">
+                <div className="flex items-center gap-2">
+                  <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--accent)]">
+                    Mesa activa
+                  </p>
+                  <InfoHint label="Introduce el marcador de cada pareja y guarda el resultado de esta mesa." />
+                </div>
+                <h2 className="mt-2 text-4xl font-semibold tracking-normal text-[var(--foreground)]">
                   {activeMatch.bracketLabel}
                 </h2>
               </div>
@@ -2387,7 +2507,7 @@ function PlayoffStageScreen({
               </button>
             </div>
 
-            <article className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
+            <article className="mt-6 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_110px_minmax(0,1fr)] lg:items-stretch">
                 <MatchResultTeamCard
                   match={activeMatch}
@@ -2400,7 +2520,7 @@ function PlayoffStageScreen({
                 />
 
                 <div className="flex items-center justify-center">
-                  <div className="rounded-full border border-white/10 bg-white/6 px-6 py-5 text-center font-mono text-sm uppercase tracking-[0.22em] text-white/46">
+                  <div className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-6 py-5 text-center font-mono text-sm uppercase tracking-[0.22em] text-[var(--muted-soft)]">
                     vs
                   </div>
                 </div>
@@ -2430,6 +2550,7 @@ function PlayoffStageScreen({
           </div>
         </div>
       ) : null}
+      <FeedbackToast feedback={feedback} />
     </ScreenFrame>
   );
 }
@@ -2445,15 +2566,12 @@ function CompletedTournamentScreen({
   const isSwissClassificationEnd =
     structure.entryStage === "swiss" && state.config.format === "swiss_only";
   const title = isSwissClassificationEnd ? "Clasificación Final" : "Torneo Cerrado";
-  const description = isSwissClassificationEnd
-    ? `El torneo terminó tras ${structure.swissRounds} rondas suizas. La clasificación final queda ordenada por victorias y desempates automáticos.`
-    : "El torneo ya ha quedado cerrado. Aquí tienes el resultado final y el ranking del torneo.";
 
   return (
     <ScreenFrame
       eyebrow="Resumen final"
       title={title}
-      description={description}
+      activeUrl={state.config.publicBaseUrl}
       leftSlot={<BackButton label="Volver a configuración" onClick={onBack} />}
       rightSlot={
         <div className="flex flex-wrap gap-2">
@@ -2477,16 +2595,16 @@ function CompletedTournamentScreen({
                 return (
                 <div
                   key={team.id}
-                  className="rounded-[28px] border border-white/10 bg-white/[0.04] p-5 backdrop-blur"
+                  className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-5"
                 >
-                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[#77cfff]">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                     {index === 0 ? "campeón" : "subcampeón"}
                   </p>
                   <div className="mt-4 flex items-center gap-3">
                     <TeamFaces team={team} />
                     <div>
-                      <p className="text-xl font-semibold text-white">{team.name}</p>
-                      <p className="text-sm text-white/42">
+                      <p className="text-xl font-semibold text-[var(--foreground)]">{team.name}</p>
+                      <p className="text-sm text-[var(--muted-soft)]">
                         {playerName(team, 0)} · {playerName(team, 1)}
                       </p>
                     </div>
@@ -2497,8 +2615,8 @@ function CompletedTournamentScreen({
           </section>
         ) : null}
 
-        <section className="overflow-x-auto rounded-[30px] border border-white/10 bg-white/[0.04] backdrop-blur">
-          <div className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 border-b border-white/10 bg-white/[0.03] px-5 py-4 font-mono text-[11px] uppercase tracking-[0.18em] text-white/48">
+        <section className="overflow-x-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)]">
+          <div className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 border-b border-[var(--stroke)] bg-[var(--surface-strong)] px-5 py-4 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
             <span>Puesto</span>
             <span>Equipo</span>
             <span>Balance</span>
@@ -2508,31 +2626,31 @@ function CompletedTournamentScreen({
             <span>Puntos</span>
           </div>
 
-          <div className="divide-y divide-white/10">
+          <div className="divide-y divide-[var(--stroke)]">
             {state.teams.map((team, index) => (
               <div
                 key={team.id}
                 className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 px-5 py-4"
               >
-                <div className="text-lg font-semibold text-white">{index + 1}</div>
+                <div className="text-lg font-semibold text-[var(--foreground)]">{index + 1}</div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-3">
                     <TeamFaces team={team} size="sm" />
                     <div className="min-w-0">
-                      <p className="truncate text-base font-semibold text-white">{team.name}</p>
-                      <p className="truncate text-sm text-white/42">
+                      <p className="truncate text-base font-semibold text-[var(--foreground)]">{team.name}</p>
+                      <p className="truncate text-sm text-[var(--muted-soft)]">
                         {playerName(team, 0)} · {playerName(team, 1)}
                       </p>
                     </div>
                   </div>
                 </div>
-                <div className="text-sm font-semibold text-white">
+                <div className="text-sm font-semibold text-[var(--foreground)]">
                   {team.wins}-{team.losses}
                 </div>
-                <div className="text-sm text-white/72">{team.buchholz}</div>
-                <div className="text-sm text-white/72">{team.vacasWon}</div>
-                <div className="text-sm text-white/72">{team.gamesWon}</div>
-                <div className="text-sm text-white/72">{team.pointsWon}</div>
+                <div className="text-sm text-[var(--muted)]">{team.buchholz}</div>
+                <div className="text-sm text-[var(--muted)]">{team.vacasWon}</div>
+                <div className="text-sm text-[var(--muted)]">{team.gamesWon}</div>
+                <div className="text-sm text-[var(--muted)]">{team.pointsWon}</div>
               </div>
             ))}
           </div>
@@ -2542,7 +2660,10 @@ function CompletedTournamentScreen({
   );
 }
 
-export function TournamentFlow({ initialState }: TournamentFlowProps) {
+export function TournamentFlow({
+  initialState,
+  networkBaseUrls = [],
+}: TournamentFlowProps) {
   const [state, setState] = useState(initialState);
   const [forcedScreen, setForcedScreen] = useState<Screen | null>(null);
   const [setupForm, setSetupForm] = useState<SetupFormState>(() =>
@@ -2551,6 +2672,7 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
   const [resultDrafts, setResultDrafts] = useState<Record<string, ResultDraft>>({});
   const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
   const [renamingParticipantId, setRenamingParticipantId] = useState<string | null>(null);
+  const [deletingParticipantId, setDeletingParticipantId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -2658,7 +2780,8 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
     startTransition(() => {
       void mutation()
         .then((nextState) => {
-          setFeedback({ tone: "success", text: successMessage });
+          void successMessage;
+          setFeedback(null);
           onSuccess?.(nextState);
         })
         .catch((error) => {
@@ -2764,6 +2887,23 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
     );
   }
 
+  function handleDeleteBotParticipant(participantId: string): void {
+    setDeletingParticipantId(participantId);
+
+    runMutation(
+      () =>
+        postAction({
+          action: "deleteBotParticipantDuringSetup",
+          payload: { participantId },
+        }),
+      "Bot eliminado.",
+      undefined,
+      () => {
+        setDeletingParticipantId(null);
+      },
+    );
+  }
+
   function handlePrepareManualTeams(): void {
     runMutation(
       () => postAction({ action: "prepareManualTeams" }),
@@ -2783,6 +2923,17 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
           payload: { teamId, slot, participantId },
         }),
       participantId ? "Persona colocada en la pareja." : "Plaza liberada.",
+    );
+  }
+
+  function handleConfirmManualTeam(teamId: string): void {
+    runMutation(
+      () =>
+        postAction({
+          action: "confirmManualTeam",
+          payload: { teamId },
+        }),
+      "Pareja aceptada.",
     );
   }
 
@@ -2891,7 +3042,7 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
 
       return `${state.participants.length}/${state.config.teamCount * 2} personas registradas. ${
         state.teams.length > 0
-          ? `${state.teams.filter((team) => isTeamComplete(team)).length}/${state.config.teamCount} parejas cerradas.`
+          ? `${state.teams.filter((team) => isTeamComplete(team) && team.confirmed).length}/${state.config.teamCount} parejas aceptadas.`
           : "Todavía no hay parejas montadas."
       } Formato: ${formatTournamentFormatLabel(state.config.format)}.`;
     }
@@ -2941,6 +3092,7 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
         }
         canUseCurrentOrigin={canUseCurrentOrigin}
         browserOrigin={browserOrigin}
+        networkBaseUrls={networkBaseUrls}
         isPending={isPending}
         feedback={feedback}
       />
@@ -2959,7 +3111,6 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
           }))
         }
         onSubmit={handleCreateTournament}
-        onSaveActiveUrl={handleUpdateActiveUrl}
         onBackToUrl={() => {
           setForcedScreen("url");
           setFeedback(null);
@@ -2992,10 +3143,13 @@ export function TournamentFlow({ initialState }: TournamentFlowProps) {
         }}
         onAddBotParticipant={handleAddBotParticipant}
         onRenameParticipant={handleRenameParticipant}
+        onDeleteBotParticipant={handleDeleteBotParticipant}
         renamingParticipantId={renamingParticipantId}
+        deletingParticipantId={deletingParticipantId}
         onCreateRandomTeams={handleCreateRandomTeams}
         onPrepareManualTeams={handlePrepareManualTeams}
         onAssignParticipant={handleAssignParticipant}
+        onConfirmManualTeam={handleConfirmManualTeam}
         onStartTournament={handleStartTournament}
         isPending={isPending}
         feedback={feedback}
