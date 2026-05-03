@@ -99,6 +99,8 @@ export interface Match {
   loserId: string | null;
   bye: boolean;
   score: MatchScore | null;
+  marker?: "autoWin" | "qualification" | "elimination";
+  topRank?: 1 | 2 | 3 | 4;
 }
 
 export interface ChatMessage {
@@ -248,11 +250,7 @@ function createTeam(seed: number): Team {
 }
 
 function getAutoTeamName(team: Team): string {
-  const names = team.players
-    .map((player) => player.name.trim())
-    .filter(Boolean);
-
-  return names.length === 2 ? `${names[0]} + ${names[1]}` : team.label;
+  return team.label;
 }
 
 function refreshTeamName(
@@ -467,11 +465,31 @@ function standingsComparator(a: Team, b: Team): number {
   );
 }
 
+function topCutPointsComparator(a: Team, b: Team): number {
+  return (
+    b.pointsWon - a.pointsWon ||
+    b.gamesWon - a.gamesWon ||
+    b.vacasWon - a.vacasWon ||
+    b.buchholz - a.buchholz ||
+    b.wins - a.wins ||
+    a.losses - b.losses ||
+    a.seed - b.seed
+  );
+}
+
 function roundRecordComparator(a: string, b: string): number {
   const [aWins, aLosses] = a.split("-").map(Number);
   const [bWins, bLosses] = b.split("-").map(Number);
 
   return bWins - aWins || aLosses - bLosses;
+}
+
+function parseRecordLabel(label: string): { wins: number; losses: number } {
+  const [wins = 0, losses = 0] = label.split("-").map(Number);
+  return {
+    wins: Number.isFinite(wins) ? wins : 0,
+    losses: Number.isFinite(losses) ? losses : 0,
+  };
 }
 
 function scoreComparator(score: MatchScore): number {
@@ -523,11 +541,85 @@ function buildByeMatch(
     revealed: stage !== "swiss",
     teamAId: teamId,
     teamBId: null,
+    status: stage === "swiss" ? "pending" : "completed",
+    winnerId: stage === "swiss" ? null : teamId,
+    loserId: null,
+    bye: true,
+    score: null,
+  };
+}
+
+function buildAutoWinMarker(
+  roundIndex: number,
+  table: number,
+  teamId: string,
+  bracketLabel: string,
+): Match {
+  return {
+    id: randomUUID(),
+    stage: "swiss",
+    roundIndex,
+    table,
+    bracketLabel,
+    revealed: false,
+    teamAId: teamId,
+    teamBId: null,
+    status: "pending",
+    winnerId: null,
+    loserId: null,
+    bye: true,
+    score: null,
+    marker: "autoWin",
+  };
+}
+
+function buildQualificationMarker(
+  roundIndex: number,
+  table: number,
+  teamId: string,
+  bracketLabel: string,
+  topRank: 1 | 2 | 3 | 4,
+): Match {
+  return {
+    id: randomUUID(),
+    stage: "swiss",
+    roundIndex,
+    table,
+    bracketLabel,
+    revealed: true,
+    teamAId: teamId,
+    teamBId: null,
     status: "completed",
     winnerId: teamId,
     loserId: null,
     bye: true,
     score: null,
+    marker: "qualification",
+    topRank,
+  };
+}
+
+function buildEliminationMarker(
+  roundIndex: number,
+  table: number,
+  teamId: string,
+  bracketLabel: string,
+): Match {
+  return {
+    id: randomUUID(),
+    stage: "swiss",
+    roundIndex,
+    table,
+    bracketLabel,
+    revealed: true,
+    teamAId: teamId,
+    teamBId: null,
+    status: "completed",
+    winnerId: null,
+    loserId: teamId,
+    bye: true,
+    score: null,
+    marker: "elimination",
   };
 }
 
@@ -574,14 +666,16 @@ function shuffleItems<T>(items: T[]): T[] {
 }
 
 function getSwissMatches(matches: Match[]): Match[] {
-  return matches.filter((match) => match.stage === "swiss");
+  return matches.filter((match) => match.stage === "swiss" && !match.marker);
 }
 
 function getCurrentStageMatches(state: TournamentState): Match[] {
   if (state.stage === "swiss") {
     return state.matches.filter(
       (match) =>
-        match.stage === "swiss" && match.roundIndex === state.currentSwissRound,
+        match.stage === "swiss" &&
+        (!match.marker || match.marker === "autoWin") &&
+        match.roundIndex === state.currentSwissRound,
     );
   }
 
@@ -622,8 +716,28 @@ function getCompletedSwissRounds(matches: Match[]): number {
   return completed;
 }
 
+function getQualifiedTopCutTeams(state: TournamentState): Team[] {
+  const qualificationOrder = new Map(
+    state.matches
+      .filter((match) => match.marker === "qualification" && match.teamAId && match.topRank)
+      .map((match) => [match.teamAId as string, match.topRank as 1 | 2 | 3 | 4]),
+  );
+
+  return getRankedTeams(state)
+    .filter((team) => team.status === "qualified")
+    .sort(
+      (left, right) =>
+        (qualificationOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+          (qualificationOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
+        standingsComparator(left, right),
+    );
+}
+
 function shouldCloseSwissPhase(state: TournamentState, teams: Team[]): boolean {
-  void teams;
+  if (state.topCut > 0) {
+    return teams.filter((team) => team.status === "qualified").length >= state.topCut;
+  }
+
   return getCompletedSwissRounds(state.matches) >= state.swissRoundsPlanned;
 }
 
@@ -641,6 +755,19 @@ function cloneState(state: TournamentState): TournamentState {
     })),
     matches: state.matches.map((match) => ({
       ...match,
+      marker:
+        match.marker === "autoWin" ||
+        match.marker === "qualification" ||
+        match.marker === "elimination"
+          ? match.marker
+          : undefined,
+      topRank:
+        match.topRank === 1 ||
+        match.topRank === 2 ||
+        match.topRank === 3 ||
+        match.topRank === 4
+          ? match.topRank
+          : undefined,
       revealed: match.revealed ?? true,
       score: match.score
         ? {
@@ -699,6 +826,44 @@ function syncParticipantsAndTeams(cloned: TournamentState): {
   return { participants, teams };
 }
 
+function normalizeGeneratedSwissMarkers(matches: Match[]): Match[] {
+  const playableGroups = new Map<string, Match[]>();
+
+  for (const match of matches) {
+    if (match.stage !== "swiss" || match.marker) {
+      continue;
+    }
+
+    const groupKey = `${match.roundIndex}:${match.bracketLabel}`;
+    playableGroups.set(groupKey, [...(playableGroups.get(groupKey) ?? []), match]);
+  }
+
+  return matches.map((match) => {
+    if (match.stage !== "swiss" || match.marker !== "elimination" || !match.teamAId) {
+      return match;
+    }
+
+    const groupKey = `${match.roundIndex}:${match.bracketLabel}`;
+    const playableGroup = playableGroups.get(groupKey) ?? [];
+
+    if (playableGroup.length === 0) {
+      return match;
+    }
+
+    const groupIsRevealed = playableGroup.every((entry) => entry.revealed);
+
+    return {
+      ...match,
+      revealed: groupIsRevealed,
+      status: groupIsRevealed ? "completed" : "pending",
+      winnerId: groupIsRevealed ? match.teamAId : null,
+      loserId: null,
+      marker: "autoWin",
+      topRank: undefined,
+    };
+  });
+}
+
 export function refreshTournamentState(state: TournamentState): TournamentState {
   const cloned = cloneState(state);
   cloned.config.format =
@@ -707,8 +872,14 @@ export function refreshTournamentState(state: TournamentState): TournamentState 
     cloned.config.teamCount,
     cloned.config.format,
   );
-  cloned.swissRoundsPlanned = structure.swissRounds;
+  const plannedRounds = cloned.swissRoundsPlanned;
+  cloned.swissRoundsPlanned = Math.max(
+    structure.swissRounds,
+    plannedRounds || 0,
+    cloned.currentSwissRound,
+  );
   cloned.topCut = structure.topCut;
+  cloned.matches = normalizeGeneratedSwissMarkers(cloned.matches);
   const synced = syncParticipantsAndTeams(cloned);
   const baseTeams = synced.teams.map((team) => ({
     ...team,
@@ -727,12 +898,34 @@ export function refreshTournamentState(state: TournamentState): TournamentState 
   }));
 
   const teamMap = new Map(baseTeams.map((team) => [team.id, team]));
+  const qualifiedTeamIds = new Set<string>();
+  const eliminatedTeamIds = new Set<string>();
 
   for (const match of cloned.matches) {
     const teamA = match.teamAId ? teamMap.get(match.teamAId) : undefined;
     const teamB = match.teamBId ? teamMap.get(match.teamBId) : undefined;
 
     if (match.status !== "completed") {
+      continue;
+    }
+
+    if (match.marker === "qualification" && match.teamAId) {
+      qualifiedTeamIds.add(match.teamAId);
+      continue;
+    }
+
+    if (match.marker === "elimination" && match.teamAId) {
+      eliminatedTeamIds.add(match.teamAId);
+      continue;
+    }
+
+    if (match.marker === "autoWin" && teamA) {
+      if (match.stage === "swiss") {
+        teamA.matchesPlayedSwiss += 1;
+        teamA.wins += 1;
+        teamA.byeCount += 1;
+        teamA.lastResult = "BYE";
+      }
       continue;
     }
 
@@ -798,18 +991,32 @@ export function refreshTournamentState(state: TournamentState): TournamentState 
 
   const rankedTeams = [...baseTeams].sort(standingsComparator);
 
+  for (const team of rankedTeams) {
+    if (qualifiedTeamIds.has(team.id)) {
+      team.status = "qualified";
+    }
+
+    if (eliminatedTeamIds.has(team.id)) {
+      team.status = "eliminated";
+    }
+  }
+
   if (cloned.stage === "swiss") {
     if (structure.topCut > 0 && shouldCloseSwissPhase(cloned, rankedTeams)) {
-      rankedTeams.forEach((team, index) => {
-        team.status = index < structure.topCut ? "qualified" : "eliminated";
+      rankedTeams.forEach((team) => {
+        if (team.status === "active") {
+          team.status = "eliminated";
+        }
       });
     }
   }
 
   if (cloned.stage === "semifinals" || cloned.stage === "final" || cloned.stage === "completed") {
     if (structure.topCut > 0) {
-      rankedTeams.forEach((team, index) => {
-        team.status = index < structure.topCut ? "qualified" : "eliminated";
+      rankedTeams.forEach((team) => {
+        if (team.status === "active") {
+          team.status = "eliminated";
+        }
       });
     }
   }
@@ -1307,27 +1514,138 @@ function createDirectSemifinals(state: TournamentState): TournamentState {
   });
 }
 
+function hasStatusMarker(
+  matches: Match[],
+  teamId: string,
+  marker: "autoWin" | "qualification" | "elimination",
+): boolean {
+  return matches.some((match) => match.marker === marker && match.teamAId === teamId);
+}
+
+function nextTopRank(matches: Match[]): 1 | 2 | 3 | 4 | null {
+  const used = new Set(
+    matches
+      .filter((match) => match.marker === "qualification" && match.topRank)
+      .map((match) => match.topRank),
+  );
+
+  for (const rank of [1, 2, 3, 4] as const) {
+    if (!used.has(rank)) {
+      return rank;
+    }
+  }
+
+  return null;
+}
+
+function pushQualificationMarker(
+  matches: Match[],
+  contextMatches: Match[],
+  roundIndex: number,
+  table: number,
+  team: Team,
+  bracketLabel: string,
+): { matches: Match[]; table: number } {
+  if (
+    hasStatusMarker(contextMatches, team.id, "qualification") ||
+    hasStatusMarker(contextMatches, team.id, "elimination")
+  ) {
+    return { matches, table };
+  }
+
+  const topRank = nextTopRank(contextMatches);
+  if (!topRank) {
+    return { matches, table };
+  }
+
+  return {
+    matches: [
+      ...matches,
+      buildQualificationMarker(roundIndex, table, team.id, bracketLabel, topRank),
+    ],
+    table: table + 1,
+  };
+}
+
+function pushEliminationMarker(
+  matches: Match[],
+  contextMatches: Match[],
+  roundIndex: number,
+  table: number,
+  team: Team,
+  bracketLabel: string,
+): { matches: Match[]; table: number } {
+  if (
+    hasStatusMarker(contextMatches, team.id, "qualification") ||
+    hasStatusMarker(contextMatches, team.id, "elimination")
+  ) {
+    return { matches, table };
+  }
+
+  return {
+    matches: [...matches, buildEliminationMarker(roundIndex, table, team.id, bracketLabel)],
+    table: table + 1,
+  };
+}
+
+function pairTeamsWithinGroup(
+  teams: Team[],
+  record: string,
+  roundIndex: number,
+  initialTable: number,
+  swissHistory: Map<string, Set<string>>,
+): { matches: Match[]; table: number } {
+  const pool = shuffleItems(teams);
+  const matches: Match[] = [];
+  let table = initialTable;
+
+  while (pool.length >= 2) {
+    const teamA = pool.shift();
+    if (!teamA) {
+      break;
+    }
+
+    const nonRepeatCandidates = pool
+      .map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate }) => !hasAlreadyPlayed(swissHistory, teamA.id, candidate.id));
+    const candidatePool =
+      nonRepeatCandidates.length > 0
+        ? nonRepeatCandidates
+        : pool.map((candidate, index) => ({ candidate, index }));
+    const randomChoice = candidatePool[Math.floor(Math.random() * candidatePool.length)];
+    const opponentIndex = randomChoice?.index ?? 0;
+    const [teamB] = pool.splice(opponentIndex, 1);
+
+    matches.push(buildMatch("swiss", roundIndex, table, teamA.id, teamB.id, record));
+    table += 1;
+  }
+
+  return { matches, table };
+}
+
 function createSwissPairings(
   state: TournamentState,
   roundIndex: number,
 ): Match[] {
-  const ranked = getRankedTeams(state);
+  const activeTeams = getRankedTeams(state).filter((team) => team.status === "active");
   const swissHistory = buildOpponentsHistory(getSwissMatches(state.matches));
-  const byeTeam = ranked.length % 2 === 1 ? selectSwissByeTeam(ranked) : null;
-  const pairableTeams = byeTeam
-    ? ranked.filter((team) => team.id !== byeTeam.id)
-    : ranked;
 
   if (roundIndex === 1) {
-    const shuffled = shuffleItems(pairableTeams);
+    const pool = shuffleItems(activeTeams);
     const matches: Match[] = [];
     let table = 1;
 
-    for (let index = 0; index < shuffled.length; index += 2) {
-      const teamA = shuffled[index];
-      const teamB = shuffled[index + 1];
+    for (let index = 0; index < pool.length; index += 2) {
+      const teamA = pool[index];
+      const teamB = pool[index + 1];
 
       if (!teamA) {
+        continue;
+      }
+
+      if (!teamB) {
+        matches.push(buildAutoWinMarker(roundIndex, table, teamA.id, "0-0"));
+        table += 1;
         continue;
       }
 
@@ -1335,15 +1653,11 @@ function createSwissPairings(
       table += 1;
     }
 
-    if (byeTeam) {
-      matches.push(buildByeMatch("swiss", roundIndex, table, byeTeam.id, "BYE"));
-    }
-
     return matches;
   }
 
   const groups = new Map<string, Team[]>();
-  for (const team of pairableTeams) {
+  for (const team of activeTeams) {
     const record = `${team.wins}-${team.losses}`;
     if (!groups.has(record)) {
       groups.set(record, []);
@@ -1351,103 +1665,175 @@ function createSwissPairings(
     groups.get(record)?.push(team);
   }
 
-  const matches: Match[] = [];
-  let carryTeam: Team | null = null;
+  let matches: Match[] = [];
   let table = 1;
 
   for (const record of [...groups.keys()].sort(roundRecordComparator)) {
-    const pool = shuffleItems([...(groups.get(record) ?? [])]);
+    const group = [...(groups.get(record) ?? [])];
+    const { losses } = parseRecordLabel(record);
+    const nextRank = nextTopRank([...state.matches, ...matches]);
+    const remainingTopSlots = nextRank ? TOP_CUT - nextRank + 1 : 0;
 
-    if (carryTeam) {
-      pool.push(carryTeam);
-      carryTeam = null;
-      const reshuffled = shuffleItems(pool);
-      pool.splice(0, pool.length, ...reshuffled);
+    if (group.length === 1) {
+      if (losses === 0 || losses === 1) {
+        const next = pushQualificationMarker(
+          matches,
+          [...state.matches, ...matches],
+          roundIndex,
+          table,
+          group[0],
+          record,
+        );
+        matches = next.matches;
+        table = next.table;
+      } else {
+        const next = pushEliminationMarker(
+          matches,
+          [...state.matches, ...matches],
+          roundIndex,
+          table,
+          group[0],
+          record,
+        );
+        matches = next.matches;
+        table = next.table;
+      }
+      continue;
     }
 
-    while (pool.length >= 2) {
-      const teamA = pool.shift();
-      if (!teamA) {
-        break;
-      }
-
-      const nonRepeatCandidates = pool
-        .map((candidate, index) => ({ candidate, index }))
-        .filter(
-          ({ candidate }) => !hasAlreadyPlayed(swissHistory, teamA.id, candidate.id),
+    if (losses === 1 && group.length <= 3 && group.length !== 2) {
+      for (const team of [...group].sort(topCutPointsComparator).slice(0, remainingTopSlots)) {
+        const next = pushQualificationMarker(
+          matches,
+          [...state.matches, ...matches],
+          roundIndex,
+          table,
+          team,
+          record,
         );
-
-      const candidatePool =
-        nonRepeatCandidates.length > 0
-          ? nonRepeatCandidates
-          : pool.map((candidate, index) => ({ candidate, index }));
-
-      const randomChoice =
-        candidatePool[Math.floor(Math.random() * candidatePool.length)];
-
-      let opponentIndex = randomChoice?.index ?? -1;
-
-      if (opponentIndex === -1) {
-        opponentIndex = pool.findIndex(
-          (candidate) => !hasAlreadyPlayed(swissHistory, teamA.id, candidate.id),
-        );
+        matches = next.matches;
+        table = next.table;
       }
+      continue;
+    }
 
-      if (opponentIndex === -1) {
-        opponentIndex = 0;
-      }
+    if (remainingTopSlots === 2 && group.length === 2) {
+      const paired = pairTeamsWithinGroup(group, record, roundIndex, table, swissHistory);
+      matches = [...matches, ...paired.matches];
+      table = paired.table;
+      continue;
+    }
 
-      const [teamB] = pool.splice(opponentIndex, 1);
-      matches.push(
-        buildMatch("swiss", roundIndex, table, teamA.id, teamB.id, record),
-      );
+    const paired = pairTeamsWithinGroup(group, record, roundIndex, table, swissHistory);
+    matches = [...matches, ...paired.matches];
+    table = paired.table;
+
+    const pairedTeamIds = new Set(
+      paired.matches.flatMap((match) => [match.teamAId, match.teamBId]).filter(Boolean),
+    );
+    const leftovers = group.filter((team) => !pairedTeamIds.has(team.id));
+    for (const team of leftovers) {
+      matches = [...matches, buildAutoWinMarker(roundIndex, table, team.id, record)];
       table += 1;
     }
-
-    if (pool.length === 1) {
-      carryTeam = pool[0];
-    }
-  }
-
-  if (carryTeam) {
-    const fallbackPool = [...matches]
-      .flatMap((match) => [match.teamAId, match.teamBId])
-      .filter(Boolean) as string[];
-    const swapTarget = fallbackPool
-      .map((teamId) => pairableTeams.find((team) => team.id === teamId))
-      .find((team): team is Team => team !== undefined && team.byeCount === 0);
-
-    if (swapTarget && carryTeam.byeCount > 0) {
-      const match = matches.find(
-        (entry) => entry.teamAId === swapTarget.id || entry.teamBId === swapTarget.id,
-      );
-
-      if (match) {
-        if (match.teamAId === swapTarget.id) {
-          match.teamAId = carryTeam.id;
-        } else {
-          match.teamBId = carryTeam.id;
-        }
-        const record = `${swapTarget.wins}-${swapTarget.losses}`;
-        matches.push(buildByeMatch("swiss", roundIndex, table, swapTarget.id, record));
-      }
-    } else {
-      const record = `${carryTeam.wins}-${carryTeam.losses}`;
-      matches.push(buildByeMatch("swiss", roundIndex, table, carryTeam.id, record));
-    }
-  } else if (byeTeam) {
-    const record = `${byeTeam.wins}-${byeTeam.losses}`;
-    matches.push(buildByeMatch("swiss", roundIndex, table, byeTeam.id, record));
   }
 
   return matches;
 }
 
-function selectSwissByeTeam(teams: Team[]): Team {
-  const candidates = teams.filter((team) => team.byeCount === 0);
-  const pool = candidates.length > 0 ? candidates : teams;
+function addTopCutProgressionMarkers(state: TournamentState): TournamentState {
+  if (state.topCut <= 0) {
+    return state;
+  }
 
-  return [...pool].sort((left, right) => -standingsComparator(left, right))[0];
+  let matches = [...state.matches];
+  let table =
+    Math.max(
+      0,
+      ...matches
+        .filter((match) => match.stage === "swiss" && match.roundIndex === state.currentSwissRound)
+        .map((match) => match.table),
+    ) + 1;
+  const refreshed = refreshTournamentState({ ...state, matches });
+  const currentMatches = refreshed.matches.filter(
+    (match) =>
+      match.stage === "swiss" &&
+      !match.marker &&
+      match.roundIndex === refreshed.currentSwissRound,
+  );
+  const byRecord = new Map<string, Match[]>();
+
+  for (const match of currentMatches) {
+    if (!byRecord.has(match.bracketLabel)) {
+      byRecord.set(match.bracketLabel, []);
+    }
+    byRecord.get(match.bracketLabel)?.push(match);
+  }
+
+  for (const record of [...byRecord.keys()].sort(roundRecordComparator)) {
+    const groupMatches = byRecord.get(record) ?? [];
+    const { losses } = parseRecordLabel(record);
+
+    if (groupMatches.length !== 1) {
+      continue;
+    }
+
+    const match = groupMatches[0];
+    if (match.status !== "completed" || !match.winnerId) {
+      continue;
+    }
+
+    const winner = refreshed.teams.find((team) => team.id === match.winnerId);
+    const loser = match.loserId
+      ? refreshed.teams.find((team) => team.id === match.loserId)
+      : null;
+
+    if (losses === 0 && winner) {
+      const next = pushQualificationMarker(
+        matches,
+        matches,
+        state.currentSwissRound,
+        table,
+        winner,
+        record,
+      );
+      matches = next.matches;
+      table = next.table;
+      continue;
+    }
+
+    const nextRank = nextTopRank(matches);
+    const remainingSlots = nextRank ? TOP_CUT - nextRank + 1 : 0;
+    if (remainingSlots === 2 && winner && loser) {
+      for (const team of [winner, loser]) {
+        const next = pushQualificationMarker(
+          matches,
+          matches,
+          state.currentSwissRound,
+          table,
+          team,
+          record,
+        );
+        matches = next.matches;
+        table = next.table;
+      }
+    } else if (losses === 1 && winner) {
+      const next = pushQualificationMarker(
+        matches,
+        matches,
+        state.currentSwissRound,
+        table,
+        winner,
+        record,
+      );
+      matches = next.matches;
+      table = next.table;
+    }
+  }
+
+  return matches.length === state.matches.length
+    ? state
+    : refreshTournamentState({ ...state, matches });
 }
 
 export function startTournament(state: TournamentState): TournamentState {
@@ -1621,6 +2007,12 @@ export function revealSwissGroup(
 
   currentRoundMatches.forEach((match) => {
     match.revealed = true;
+
+    if ((match.bye || match.marker === "autoWin") && match.teamAId) {
+      match.status = "completed";
+      match.winnerId = match.teamAId;
+      match.loserId = null;
+    }
   });
 
   return refreshTournamentState(cloned);
@@ -1628,7 +2020,7 @@ export function revealSwissGroup(
 
 function createSemifinals(state: TournamentState): TournamentState {
   const refreshed = refreshTournamentState(state);
-  const ranked = getRankedTeams(refreshed);
+  const ranked = getQualifiedTopCutTeams(refreshed);
 
   if (ranked.length < TOP_CUT) {
     throw new Error("No hay suficientes equipos para montar semifinales.");
@@ -1709,25 +2101,70 @@ export function advanceTournament(state: TournamentState): TournamentState {
   );
 
   if (refreshed.stage === "swiss") {
-    if (!isCurrentStageComplete(refreshed)) {
+    const progressed = addTopCutProgressionMarkers(refreshed);
+    const progressedStructure = getTournamentStructure(
+      progressed.config.teamCount,
+      progressed.config.format,
+    );
+
+    if (
+      progressedStructure.topCut > 0 &&
+      getQualifiedTopCutTeams(progressed).length >= progressedStructure.topCut
+    ) {
+      return createSemifinals(progressed);
+    }
+
+    if (!isCurrentStageComplete(progressed)) {
       throw new Error("Completa primero todos los enfrentamientos de la ronda actual.");
     }
 
-    if (refreshed.currentSwissRound >= refreshed.swissRoundsPlanned) {
-      if (structure.topCut > 0) {
-        return createSemifinals(refreshed);
-      }
-
-      return finalizeSwissClassification(refreshed);
+    if (
+      progressed.currentSwissRound >= progressed.swissRoundsPlanned &&
+      progressedStructure.topCut <= 0
+    ) {
+      return finalizeSwissClassification(progressed);
     }
 
-    const nextRound = refreshed.currentSwissRound + 1;
-    const nextMatches = createSwissPairings(refreshed, nextRound);
+    if (
+      progressed.currentSwissRound >= progressed.swissRoundsPlanned &&
+      progressedStructure.topCut > 0
+    ) {
+      progressed.swissRoundsPlanned = progressed.currentSwissRound + 1;
+    }
+
+    if (progressed.currentSwissRound >= progressed.swissRoundsPlanned) {
+      if (structure.topCut > 0) {
+        return createSemifinals(progressed);
+      }
+
+      return finalizeSwissClassification(progressed);
+    }
+
+    const nextRound = progressed.currentSwissRound + 1;
+    const nextMatches = createSwissPairings(progressed, nextRound);
+
+    if (nextMatches.filter((match) => !match.marker).length === 0) {
+      const finalProgressed = addTopCutProgressionMarkers(refreshTournamentState({
+        ...progressed,
+        currentSwissRound: nextRound,
+        matches: [...progressed.matches, ...nextMatches],
+      }));
+
+      if (
+        progressedStructure.topCut > 0 &&
+        getQualifiedTopCutTeams(finalProgressed).length >= progressedStructure.topCut
+      ) {
+        return createSemifinals(finalProgressed);
+      }
+
+      throw new Error("No quedan enfrentamientos suficientes para completar el top 4.");
+    }
 
     return refreshTournamentState({
-      ...refreshed,
+      ...progressed,
       currentSwissRound: nextRound,
-      matches: [...refreshed.matches, ...nextMatches],
+      swissRoundsPlanned: Math.max(progressed.swissRoundsPlanned, nextRound),
+      matches: [...progressed.matches, ...nextMatches],
     });
   }
 

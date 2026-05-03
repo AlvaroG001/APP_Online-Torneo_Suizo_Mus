@@ -1,0 +1,52 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - button "← Volver a la URL" [ref=e7] [cursor=pointer]
+      - paragraph [ref=e8]: Paso 2 · Configuración
+      - heading "Formato" [level=1] [ref=e9]
+    - generic [ref=e11]:
+      - paragraph [ref=e12]: URL activa · http://192.168.0.101:3000
+      - paragraph [ref=e13]: Creado por Álvaro García Ortiz
+  - generic [ref=e15]:
+    - generic [ref=e16]:
+      - generic [ref=e17]:
+        - generic [ref=e18]:
+          - paragraph [ref=e19]: Estructura calculada
+          - generic [ref=e20]:
+            - button "Se calcula automáticamente con el número de parejas y el formato elegido." [ref=e21] [cursor=pointer]: "?"
+            - tooltip "Se calcula automáticamente con el número de parejas y el formato elegido."
+        - heading "5 rondas suizas + top 4" [level=3] [ref=e22]
+        - generic [ref=e23]:
+          - generic [ref=e24]: 7 fases totales
+          - generic [ref=e25]: Suizo + top 4
+      - generic [ref=e26]:
+        - paragraph [ref=e27]: Estado actual
+        - paragraph [ref=e28]: "50/50 personas registradas. 25/25 parejas aceptadas. Formato: Suizo + top 4."
+        - button "Continuar registro y parejas" [ref=e30] [cursor=pointer]
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - text: Nombre del torneo
+          - textbox "Nombre del torneo" [ref=e34]: Riañcimo
+        - generic [ref=e35]:
+          - generic [ref=e36]:
+            - text: Tipo de torneo
+            - generic [ref=e37]:
+              - button "Elige suizo solo para terminar por clasificación, o suizo + top 4 para jugar semifinales y final." [ref=e38] [cursor=pointer]: "?"
+              - tooltip "Elige suizo solo para terminar por clasificación, o suizo + top 4 para jugar semifinales y final."
+          - combobox [ref=e39]:
+            - option "Suizo + top 4" [selected]
+            - option "Suizo solo"
+        - generic [ref=e40]:
+          - text: Número de parejas
+          - spinbutton "Número de parejas" [ref=e41]: "25"
+        - generic [ref=e42]:
+          - text: Vacas por partida
+          - spinbutton "Vacas por partida" [ref=e43]: "1"
+        - generic [ref=e44]:
+          - text: Juegos por vaca
+          - spinbutton "Juegos por vaca" [ref=e45]: "1"
+        - generic [ref=e46]:
+          - text: Puntos por juego
+          - spinbutton "Puntos por juego" [ref=e47]: "30"
+      - button "Guardar y pasar al registro" [ref=e49] [cursor=pointer]

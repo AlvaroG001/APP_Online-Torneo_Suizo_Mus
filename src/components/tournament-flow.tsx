@@ -4,6 +4,7 @@
 
 import QRCode from "qrcode";
 import { InfoHint } from "@/components/info-hint";
+import { TournamentWatermark } from "@/components/tournament-watermark";
 import {
   useEffect,
   useMemo,
@@ -14,6 +15,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import type {
   Match,
@@ -25,6 +27,7 @@ import type {
   TournamentState,
 } from "@/lib/tournament";
 import {
+  TOP_CUT,
   getTournamentStructure,
   isPointsOnlyMatchFormat,
   isTeamComplete,
@@ -69,12 +72,25 @@ interface SwissColumnBox {
   revealedMatches: Match[];
   hiddenMatches: Match[];
   teams: Team[];
+  qualifiedTeams: Array<{ team: Team; topRank: 1 | 2 | 3 | 4 }>;
+  eliminatedTeams: Team[];
   isEditable: boolean;
 }
 
 interface SwissColumn {
   depth: number;
   boxes: SwissColumnBox[];
+}
+
+interface TopCutFooterItem {
+  team: Team;
+  topRank: 1 | 2 | 3 | 4;
+}
+
+interface FinalClassificationItem {
+  team: Team;
+  rank: number;
+  topRank: 1 | 2 | 3 | 4 | null;
 }
 
 type Screen = "url" | "setup" | "registration" | "swiss" | "topcut";
@@ -125,6 +141,40 @@ function useViewportProfile(): ReturnType<typeof getViewportProfileSnapshot> {
   }, []);
 
   return profile;
+}
+
+function useElementHeight<T extends HTMLElement>(): [RefObject<T | null>, number] {
+  const ref = useRef<T | null>(null);
+  const [height, setHeight] = useState(0);
+
+  useEffect(() => {
+    const element = ref.current;
+
+    if (!element || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    let animationFrame = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      animationFrame = window.requestAnimationFrame(() => {
+        setHeight(Math.round(entry.contentRect.height));
+      });
+    });
+
+    observer.observe(element);
+
+    return () => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      observer.disconnect();
+    };
+  }, []);
+
+  return [ref, height];
 }
 
 function getBrowserOriginSnapshot(): string {
@@ -218,7 +268,9 @@ function parseRecordLabel(label: string): { wins: number; losses: number } {
 function getCurrentSwissMatches(state: TournamentState): Match[] {
   return state.matches.filter(
     (match) =>
-      match.stage === "swiss" && match.roundIndex === state.currentSwissRound,
+      match.stage === "swiss" &&
+      (!match.marker || match.marker === "autoWin") &&
+      match.roundIndex === state.currentSwissRound,
   );
 }
 
@@ -234,10 +286,146 @@ function getCurrentPlayoffMatches(state: TournamentState): Match[] {
   return [];
 }
 
+function getNextTopRank(items: TopCutFooterItem[]): 1 | 2 | 3 | 4 | null {
+  const used = new Set(items.map((item) => item.topRank));
+
+  for (const rank of [1, 2, 3, 4] as const) {
+    if (!used.has(rank)) {
+      return rank;
+    }
+  }
+
+  return null;
+}
+
+function addProjectedTopCutItem(
+  items: TopCutFooterItem[],
+  team: Team | null | undefined,
+): TopCutFooterItem[] {
+  if (!team || items.some((item) => item.team.id === team.id)) {
+    return items;
+  }
+
+  const topRank = getNextTopRank(items);
+  if (!topRank) {
+    return items;
+  }
+
+  return [...items, { team, topRank }];
+}
+
+function getTopCutFooterItems(state: TournamentState): TopCutFooterItem[] {
+  let items = state.matches
+    .filter(
+      (match) =>
+        match.stage === "swiss" &&
+        match.marker === "qualification" &&
+        match.teamAId &&
+        match.topRank,
+    )
+    .map((match) => {
+      const team = state.teams.find((entry) => entry.id === match.teamAId);
+      return team && match.topRank
+        ? { team, topRank: match.topRank as 1 | 2 | 3 | 4 }
+        : null;
+    })
+    .filter((item): item is TopCutFooterItem => Boolean(item));
+
+  const currentPlayableMatches = state.matches.filter(
+    (match) =>
+      match.stage === "swiss" &&
+      !match.marker &&
+      match.roundIndex === state.currentSwissRound,
+  );
+  const currentGroups = new Map<string, Match[]>();
+
+  for (const match of currentPlayableMatches) {
+    currentGroups.set(match.bracketLabel, [
+      ...(currentGroups.get(match.bracketLabel) ?? []),
+      match,
+    ]);
+  }
+
+  for (const label of [...currentGroups.keys()].sort((left, right) => {
+    const leftRecord = parseRecordLabel(left);
+    const rightRecord = parseRecordLabel(right);
+    return rightRecord.wins - leftRecord.wins || leftRecord.losses - rightRecord.losses;
+  })) {
+    const matches = currentGroups.get(label) ?? [];
+    const { losses } = parseRecordLabel(label);
+
+    if (matches.length !== 1 || items.length >= TOP_CUT) {
+      continue;
+    }
+
+    const match = matches[0];
+    if (match.status !== "completed") {
+      continue;
+    }
+
+    const winner = match.winnerId ? state.teams.find((team) => team.id === match.winnerId) : null;
+    const loser = match.loserId ? state.teams.find((team) => team.id === match.loserId) : null;
+    const remainingSlots = TOP_CUT - items.length;
+
+    if (losses === 0) {
+      items = addProjectedTopCutItem(items, winner);
+    } else if (remainingSlots === 2 && winner && loser) {
+      items = addProjectedTopCutItem(items, winner);
+      items = addProjectedTopCutItem(items, loser);
+    } else if (losses === 1) {
+      items = addProjectedTopCutItem(items, winner);
+    }
+  }
+
+  return items.toSorted((left, right) => left.topRank - right.topRank);
+}
+
+function compareFinalClassificationTeams(left: Team, right: Team): number {
+  const leftPhase = left.wins + left.losses;
+  const rightPhase = right.wins + right.losses;
+
+  return (
+    rightPhase - leftPhase ||
+    right.wins - left.wins ||
+    left.losses - right.losses ||
+    right.pointsWon - left.pointsWon ||
+    right.gamesWon - left.gamesWon ||
+    right.vacasWon - left.vacasWon ||
+    right.buchholz - left.buchholz ||
+    left.seed - right.seed
+  );
+}
+
+function getFinalClassificationItems(
+  state: TournamentState,
+  topCutItems: TopCutFooterItem[],
+): FinalClassificationItem[] {
+  const topCutTeamIds = new Set(topCutItems.map((item) => item.team.id));
+  const topItems = topCutItems.map(({ team, topRank }) => ({
+    team,
+    topRank,
+    rank: topRank,
+  }));
+  const restItems = state.teams
+    .filter((team) => !topCutTeamIds.has(team.id))
+    .toSorted(compareFinalClassificationTeams)
+    .map((team, index) => ({
+      team,
+      topRank: null,
+      rank: TOP_CUT + index + 1,
+    }));
+
+  return [...topItems, ...restItems];
+}
+
 function buildSwissColumns(state: TournamentState): SwissColumn[] {
-  const swissMatches = state.matches.filter((match) => match.stage === "swiss");
+  const swissMatches = state.matches.filter(
+    (match) => match.stage === "swiss" && match.marker !== "qualification" && match.marker !== "elimination",
+  );
   const matchGroups = new Map<string, Match[]>();
   const standingsGroups = new Map<string, Team[]>();
+  const qualifiedGroups = new Map<string, Array<{ team: Team; topRank: 1 | 2 | 3 | 4 }>>();
+  const eliminatedGroups = new Map<string, Team[]>();
   const editableLabels = new Set<string>();
 
   for (const match of swissMatches) {
@@ -253,6 +441,18 @@ function buildSwissColumns(state: TournamentState): SwissColumn[] {
 
   for (const team of state.teams) {
     const label = `${team.wins}-${team.losses}`;
+    if (team.status === "qualified") {
+      continue;
+    }
+
+    if (team.status === "eliminated") {
+      if (!eliminatedGroups.has(label)) {
+        eliminatedGroups.set(label, []);
+      }
+      eliminatedGroups.get(label)?.push(team);
+      continue;
+    }
+
     if (!standingsGroups.has(label)) {
       standingsGroups.set(label, []);
     }
@@ -269,9 +469,8 @@ function buildSwissColumns(state: TournamentState): SwissColumn[] {
     0,
   );
 
-  return Array.from({ length: maxDepth + 1 }, (_, depth) => ({
-    depth,
-    boxes: Array.from({ length: depth + 1 }, (_, rowIndex) => {
+  return Array.from({ length: maxDepth + 1 }, (_, depth) => {
+    const boxes = Array.from({ length: depth + 1 }, (_, rowIndex) => {
       const wins = depth - rowIndex;
       const losses = rowIndex;
       const label = `${wins}-${losses}`;
@@ -282,10 +481,23 @@ function buildSwissColumns(state: TournamentState): SwissColumn[] {
         revealedMatches: matches.filter((match) => match.revealed),
         hiddenMatches: matches.filter((match) => !match.revealed),
         teams: standingsGroups.get(label) ?? [],
+        qualifiedTeams: (qualifiedGroups.get(label) ?? []).toSorted(
+          (left, right) => left.topRank - right.topRank,
+        ),
+        eliminatedTeams: eliminatedGroups.get(label) ?? [],
         isEditable: editableLabels.has(label),
       };
-    }),
-  }));
+    }).filter(
+      (box) =>
+        box.matches.length > 0 ||
+        box.teams.length > 0 ||
+        box.qualifiedTeams.length > 0 ||
+        box.eliminatedTeams.length > 0 ||
+        box.isEditable,
+    );
+
+    return { depth, boxes };
+  }).filter((column) => column.boxes.length > 0);
 }
 
 function getRegistrationUrl(publicBaseUrl: string, browserOrigin: string): string {
@@ -396,9 +608,24 @@ function TeamFaces({
   size = "md",
 }: {
   team: Team;
-  size?: "sm" | "md" | "lg" | "xl";
+  size?: "xxxs" | "xxs" | "xs" | "sm" | "md" | "lg" | "xl";
 }) {
   const sizeClasses = {
+    xxxs: {
+      frame: "h-4 w-4 text-[7px]",
+      overlap: "translate-x-[-3px]",
+      margin: "-ml-0.5",
+    },
+    xxs: {
+      frame: "h-5 w-5 text-[8px]",
+      overlap: "translate-x-[-4px]",
+      margin: "-ml-1",
+    },
+    xs: {
+      frame: "h-7 w-7 text-[9px]",
+      overlap: "translate-x-[-6px]",
+      margin: "-ml-1.5",
+    },
     sm: {
       frame: "h-10 w-10 text-[11px]",
       overlap: "translate-x-[-8px]",
@@ -548,9 +775,10 @@ function ScreenFrame({
     <div className="relative h-[100svh] overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.055)_0%,transparent_34%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,transparent_0%,rgba(255,255,255,0.03)_50%,transparent_100%)] opacity-40" />
+      <TournamentWatermark />
 
       <main
-        className="admin-shell relative mx-auto flex h-[100svh] w-full max-w-[1920px] flex-col overflow-hidden px-3 py-4 md:px-4 md:py-5 2xl:px-5"
+        className="admin-shell relative z-10 mx-auto flex h-[100svh] w-full max-w-[1920px] flex-col overflow-hidden px-3 py-4 md:px-4 md:py-5 2xl:px-5"
         data-density={viewportProfile.density}
         style={
           {
@@ -1480,7 +1708,7 @@ function RegistrationStageScreen({
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-lg font-semibold text-[var(--foreground)]">
-                              {team.nameIsCustom ? team.name : team.label}
+                              {team.name}
                             </p>
                           </div>
                           {state.teamCreationMode === "manual" ? (
@@ -1551,7 +1779,7 @@ function RegistrationStageScreen({
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-lg font-semibold text-[var(--foreground)]">
-                          {team.nameIsCustom ? team.name : team.label}
+                          {team.name}
                         </p>
                       </div>
                     </div>
@@ -1789,14 +2017,63 @@ function MatchTile({
   teamsById,
   pointsOnlyMode,
   onOpen,
+  density = "regular",
 }: {
   match: Match;
   teamsById: Map<string, Team>;
   pointsOnlyMode: boolean;
   onOpen: (matchId: string) => void;
+  density?: "regular" | "compact" | "micro" | "nano";
 }) {
   const teamA = match.teamAId ? teamsById.get(match.teamAId) : null;
   const teamB = match.teamBId ? teamsById.get(match.teamBId) : null;
+  const compact = density !== "regular";
+  const micro = density === "micro" || density === "nano";
+  const nano = density === "nano";
+  const tilePadding = nano ? "p-px" : micro ? "p-0.5" : compact ? "p-1" : "p-1.5";
+  const metaText = nano
+    ? "text-[6px] tracking-[0.1em]"
+    : micro
+      ? "text-[7px] tracking-[0.12em]"
+      : compact
+        ? "text-[8px] tracking-[0.14em]"
+        : "text-[9px] tracking-[0.18em]";
+  const teamFaceSize = nano ? "xxxs" : compact ? "xxs" : "xs";
+  const teamRowClass = nano
+    ? "grid min-h-0 grid-cols-[minmax(0,1fr)_22px] items-center gap-0.5 rounded-[6px] px-1 py-px"
+    : micro
+      ? "grid min-h-0 grid-cols-[minmax(0,1fr)_24px] items-center gap-1 rounded-[7px] px-1 py-0.5"
+      : compact
+        ? "grid min-h-0 grid-cols-[minmax(0,1fr)_28px] items-center gap-1.5 rounded-[7px] px-1.5 py-0.5"
+        : "grid min-h-0 grid-cols-[minmax(0,1fr)_32px] items-center gap-2 rounded-[8px] px-2 py-1";
+  const teamTextClass = nano
+    ? "text-[8px] leading-[10px]"
+    : micro
+      ? "text-[9px] leading-3"
+      : compact
+        ? "text-[10px] leading-3"
+        : "text-[11px] leading-4";
+  const scoreClass = nano
+    ? "h-4 min-w-5 rounded-[6px] px-0.5 text-[8px]"
+    : micro
+      ? "h-5 min-w-6 rounded-[7px] px-1 text-[10px]"
+      : compact
+        ? "h-6 min-w-7 rounded-[7px] px-1 text-[11px]"
+        : "h-7 min-w-8 rounded-[8px] px-1.5 text-xs";
+  const matchBodyGap = nano
+    ? "mt-0.5 grid gap-px"
+    : micro
+      ? "mt-1 grid gap-0.5"
+      : compact
+        ? "mt-1 grid gap-0.5"
+        : "mt-1.5 grid gap-1";
+  const byeRowClass = nano
+    ? "mt-0.5 flex min-w-0 items-center gap-1 rounded-[6px] bg-[rgba(242,247,238,0.03)] px-1 py-px"
+    : micro
+      ? "mt-1 flex min-w-0 items-center gap-1 rounded-[7px] bg-[rgba(242,247,238,0.03)] px-1 py-0.5"
+      : compact
+        ? "mt-1 flex min-w-0 items-center gap-1.5 rounded-[7px] bg-[rgba(242,247,238,0.03)] px-1.5 py-0.5"
+        : "mt-1.5 flex min-w-0 items-center gap-2 rounded-[8px] bg-[rgba(242,247,238,0.03)] px-1.5 py-1";
   const scoreA = pointsOnlyMode
     ? match.score?.teamA.points ?? 0
     : match.score?.teamA.vacas ?? 0;
@@ -1806,15 +2083,19 @@ function MatchTile({
 
   if (match.bye && teamA) {
     return (
-      <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
-          mesa {match.table}
-        </p>
-        <div className="mt-3 flex flex-col items-center text-center">
-          <TeamFaces team={teamA} size="lg" />
-          <p className="mt-4 text-base font-semibold text-[var(--foreground)]">{teamA.name}</p>
-          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--accent)]">
+      <div className={`match-tile rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] ${tilePadding} shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]`}>
+        <div className="flex items-center justify-between gap-2">
+          <p className={`font-mono uppercase text-[var(--accent)] ${metaText}`}>
+            mesa {match.table}
+          </p>
+          <p className={`font-mono uppercase text-[var(--muted-soft)] ${metaText}`}>
             bye automático
+          </p>
+        </div>
+        <div className={byeRowClass}>
+          <TeamFaces team={teamA} size={teamFaceSize} />
+          <p className={`min-w-0 truncate font-semibold text-[var(--foreground)] ${compact ? "text-[10px]" : "text-xs"}`}>
+            {teamA.name}
           </p>
         </div>
       </div>
@@ -1829,115 +2110,97 @@ function MatchTile({
     <button
       type="button"
       onClick={() => onOpen(match.id)}
-      className="w-full rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]"
+      className={`match-tile w-full rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] ${tilePadding} text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]`}
     >
-      <div className="flex items-center justify-between gap-3">
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
+      <div className="flex items-center justify-between gap-2">
+        <p className={`font-mono uppercase text-[var(--accent)] ${metaText}`}>
           mesa {match.table}
         </p>
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
+        <p className={`font-mono uppercase text-[var(--muted-soft)] ${metaText}`}>
           {match.status === "completed"
             ? `${pointsOnlyMode ? match.score?.teamA.points ?? 0 : match.score?.teamA.vacas ?? 0}-${pointsOnlyMode ? match.score?.teamB.points ?? 0 : match.score?.teamB.vacas ?? 0}`
-            : "pendiente"}
+            : "pend."}
         </p>
       </div>
 
-      <div className="mt-4 space-y-3">
-        {[
-          { team: teamA, side: "left" as const, score: scoreA },
-          { team: teamB, side: "right" as const, score: scoreB },
-        ].map(({ team, side, score }, index) => (
-          <div key={team.id}>
-            <div
-              className={`grid w-full max-w-full min-w-0 items-center gap-3 overflow-hidden rounded-[8px] px-3 py-2 ${
-                side === "left"
-                  ? "grid-cols-[minmax(0,1fr)_50px]"
-                  : "grid-cols-[50px_minmax(0,1fr)]"
-              } ${
-                pointsOnlyMode && match.status === "completed"
-                  ? match.winnerId === team.id
-                    ? "border border-emerald-400/26 bg-emerald-500/10"
-                    : match.loserId === team.id
-                      ? "border border-rose-400/18 bg-rose-500/8"
-                      : ""
-                  : ""
+      <div className={matchBodyGap}>
+        <div
+          className={`${teamRowClass} ${
+            pointsOnlyMode && match.status === "completed" && match.winnerId === teamA.id
+              ? "border border-emerald-400/26 bg-emerald-500/10"
+              : pointsOnlyMode && match.status === "completed" && match.loserId === teamA.id
+                ? "border border-rose-400/18 bg-rose-500/8"
+                : "bg-[rgba(242,247,238,0.03)]"
+          }`}
+        >
+          <div className="flex min-w-0 flex-col items-start gap-0.5">
+            <TeamFaces team={teamA} size={teamFaceSize} />
+            <p
+              className={`w-full min-w-0 truncate font-semibold ${teamTextClass} ${
+                pointsOnlyMode && match.status === "completed" && match.winnerId === teamA.id
+                  ? "text-emerald-200"
+                  : pointsOnlyMode && match.status === "completed" && match.loserId === teamA.id
+                    ? "text-rose-100"
+                    : "text-[var(--foreground)]"
               }`}
             >
-              {side === "left" ? (
-                <>
-                  <div className="min-w-0 overflow-hidden text-left">
-                    <div className="flex justify-start">
-                      <TeamFaces team={team} size="md" />
-                    </div>
-                    <div className="mt-2 min-w-0">
-                      <p
-                        className={`break-words text-sm font-semibold leading-5 ${
-                          pointsOnlyMode && match.status === "completed" && match.winnerId === team.id
-                            ? "text-emerald-200"
-                            : pointsOnlyMode &&
-                                match.status === "completed" &&
-                                match.loserId === team.id
-                              ? "text-rose-100"
-                              : "text-[var(--foreground)]"
-                        }`}
-                      >
-                        {team.name}
-                      </p>
-                      <p className="truncate text-[11px] text-[var(--muted-soft)]">
-                        {playerName(team, 0)} · {playerName(team, 1)}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex h-10 min-w-[50px] flex-none items-center justify-center rounded-[8px] border border-[var(--accent-border)] bg-[var(--background)] px-3 font-mono text-base font-extrabold text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                    {score}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex h-10 min-w-[50px] flex-none items-center justify-center rounded-[8px] border border-[var(--accent-border)] bg-[var(--background)] px-3 font-mono text-base font-extrabold text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                    {score}
-                  </div>
-                  <div className="min-w-0 overflow-hidden text-right">
-                    <div className="flex justify-end">
-                      <TeamFaces team={team} size="md" />
-                    </div>
-                    <div className="mt-2 min-w-0">
-                      <p
-                        className={`break-words text-sm font-semibold leading-5 ${
-                          pointsOnlyMode && match.status === "completed" && match.winnerId === team.id
-                            ? "text-emerald-200"
-                            : pointsOnlyMode &&
-                                match.status === "completed" &&
-                                match.loserId === team.id
-                              ? "text-rose-100"
-                              : "text-[var(--foreground)]"
-                        }`}
-                      >
-                        {team.name}
-                      </p>
-                      <p className="truncate text-[11px] text-[var(--muted-soft)]">
-                        {playerName(team, 0)} · {playerName(team, 1)}
-                      </p>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {index === 0 ? (
-              <div className="mt-3 flex items-center gap-3">
-                <div className="h-[2px] flex-1 bg-[rgba(244,247,239,0.20)]" />
-                <div className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-2 text-center font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
-                  vs
-                </div>
-                <div className="h-[2px] flex-1 bg-[rgba(244,247,239,0.20)]" />
-              </div>
-            ) : null}
+              {teamA.name}
+            </p>
           </div>
-        ))}
+          <div className={`flex flex-none items-center justify-center border border-[var(--accent-border)] bg-[var(--background)] font-mono font-extrabold text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${scoreClass}`}>
+            {scoreA}
+          </div>
+        </div>
+
+        <div className={`grid grid-cols-[1fr_auto_1fr] items-center ${nano ? "gap-0.5" : micro ? "gap-1" : "gap-2"}`}>
+          <div className="h-px bg-[rgba(242,247,238,0.14)]" />
+          <span className={`font-mono uppercase text-[var(--muted-soft)] ${nano ? "text-[5px] tracking-[0.1em]" : micro ? "text-[6px] tracking-[0.12em]" : "text-[8px] tracking-[0.18em]"}`}>
+            vs
+          </span>
+          <div className="h-px bg-[rgba(242,247,238,0.14)]" />
+        </div>
+
+        <div
+          className={`${teamRowClass} ${
+            pointsOnlyMode && match.status === "completed" && match.winnerId === teamB.id
+              ? "border border-emerald-400/26 bg-emerald-500/10"
+              : pointsOnlyMode && match.status === "completed" && match.loserId === teamB.id
+                ? "border border-rose-400/18 bg-rose-500/8"
+                : "bg-[rgba(242,247,238,0.03)]"
+          }`}
+        >
+          <div className="flex min-w-0 flex-col items-start gap-0.5">
+            <TeamFaces team={teamB} size={teamFaceSize} />
+            <p
+              className={`w-full min-w-0 truncate font-semibold ${teamTextClass} ${
+                pointsOnlyMode && match.status === "completed" && match.winnerId === teamB.id
+                  ? "text-emerald-200"
+                  : pointsOnlyMode && match.status === "completed" && match.loserId === teamB.id
+                    ? "text-rose-100"
+                    : "text-[var(--foreground)]"
+              }`}
+            >
+              {teamB.name}
+            </p>
+          </div>
+          <div className={`flex flex-none items-center justify-center border border-[var(--accent-border)] bg-[var(--background)] font-mono font-extrabold text-[var(--foreground)] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${scoreClass}`}>
+            {scoreB}
+          </div>
+        </div>
       </div>
     </button>
   );
+}
+
+function chunkByRows<T>(items: T[], rowCount: number): T[][] {
+  const safeRowCount = Math.max(1, rowCount);
+  const chunks: T[][] = [];
+
+  for (let index = 0; index < items.length; index += safeRowCount) {
+    chunks.push(items.slice(index, index + safeRowCount));
+  }
+
+  return chunks.length > 0 ? chunks : [[]];
 }
 
 function MatchResultTeamCard({
@@ -1975,9 +2238,6 @@ function MatchResultTeamCard({
       <div className="flex flex-col items-center text-center">
         <TeamFaces team={team} size="xl" />
         <p className="mt-5 text-2xl font-semibold text-[var(--foreground)]">{team.name}</p>
-        <p className="mt-2 text-sm text-[var(--muted-soft)]">
-          {playerName(team, 0)} · {playerName(team, 1)}
-        </p>
         <span className="mt-4 rounded-full border border-[var(--stroke)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
           {team.wins}-{team.losses}
         </span>
@@ -2080,12 +2340,22 @@ function SwissStageScreen({
   const pendingMatchesCount = currentRoundMatches.filter(
     (match) => match.status !== "completed",
   ).length;
+  const topCutFooterItems = useMemo(() => getTopCutFooterItems(state), [state]);
+  const qualifiedTopCutCount = topCutFooterItems.length;
+  const canAdvanceToTopCut = structure.topCut > 0 && qualifiedTopCutCount >= structure.topCut;
+  const finalClassificationItems = useMemo(
+    () => getFinalClassificationItems(state, topCutFooterItems),
+    [state, topCutFooterItems],
+  );
+  const showFinalClassification = canAdvanceToTopCut && roundComplete;
   const advanceLabel =
-    state.currentSwissRound >= state.swissRoundsPlanned
-      ? structure.topCut > 0
-        ? "Pasar al top 4"
-        : "Cerrar clasificación final"
-      : "Pasar a la siguiente ronda";
+    structure.topCut > 0
+      ? canAdvanceToTopCut
+        ? "SEMIFINALES"
+        : "Preparar siguiente ronda"
+      : state.currentSwissRound >= state.swissRoundsPlanned
+        ? "Cerrar clasificación final"
+        : "Pasar a la siguiente ronda";
   const activeMatch = activeMatchId
     ? currentRoundMatches.find((match) => match.id === activeMatchId) ??
       state.matches.find((match) => match.id === activeMatchId) ??
@@ -2097,10 +2367,178 @@ function SwissStageScreen({
         teamB: activeMatch.teamBId ? teamsById.get(activeMatch.teamBId) ?? null : null,
       }
     : null;
+  const nextDrawableGroupLabel =
+    columns
+      .flatMap((column) => column.boxes)
+      .find(
+        (box) =>
+          box.isEditable &&
+          box.hiddenMatches.length > 0 &&
+          box.revealedMatches.length === 0,
+      )?.label ?? null;
+  const viewportProfile = useViewportProfile();
+  const [swissBoardMeasureRef, measuredSwissBoardHeight] = useElementHeight<HTMLElement>();
+  const maxSwissRows = Math.max(1, ...columns.map((column) => column.boxes.length));
+  const maxBoxItems = Math.max(
+    1,
+    ...columns.flatMap((column) =>
+      column.boxes.map((box) =>
+        Math.max(
+          box.revealedMatches.length,
+          box.teams.length,
+          box.qualifiedTeams.length,
+          box.eliminatedTeams.length,
+          box.hiddenMatches.length,
+        ),
+      ),
+    ),
+  );
+  const swissDensity =
+    state.config.teamCount >= 24 || maxBoxItems >= 12
+      ? "dense"
+      : state.config.teamCount >= 14 || maxBoxItems >= 8
+        ? "balanced"
+        : "roomy";
+  const fallbackSwissBoardHeight = Math.max(
+    320,
+    viewportProfile.height - (viewportProfile.density === "compact" ? 142 : 166),
+  );
+  const swissBoardHeight = Math.max(320, measuredSwissBoardHeight || fallbackSwissBoardHeight);
+  const swissBoxGap = viewportProfile.density === "compact" ? 6 : 8;
+  const swissBoxHeaderHeight = swissDensity === "dense" ? 24 : 30;
+  const swissBoxBodyPadding = swissDensity === "dense" ? 10 : 14;
+  const swissItemGap = swissDensity === "dense" ? 5 : 6;
+  const swissRowSafetyPx = swissDensity === "dense" ? 14 : 16;
+  const swissRegularTeamRowHeight = swissDensity === "dense" ? 40 : 44;
+  const swissCompactTeamRowHeight = swissDensity === "dense" ? 33 : 37;
+  const swissNanoTeamRowHeight = swissDensity === "dense" ? 28 : 32;
+  const swissRegularMatchRowHeight = swissDensity === "dense" ? 140 : 152;
+  const swissCompactMatchRowHeight = swissDensity === "dense" ? 112 : 122;
+  const swissMicroMatchRowHeight = swissDensity === "dense" ? 86 : 94;
+  const swissNanoMatchRowHeight = swissDensity === "dense" ? 68 : 74;
+  const swissMatchSafetyPx = swissDensity === "dense" ? 16 : 18;
+  const getSwissBoxBodyHeight = (boxesInColumn: number): number => {
+    const boxHeight =
+      (swissBoardHeight - Math.max(0, boxesInColumn - 1) * swissBoxGap) / boxesInColumn;
+
+    return Math.max(
+      1,
+      boxHeight - swissBoxHeaderHeight - swissBoxBodyPadding - swissItemGap * 2,
+    );
+  };
+  const minimumTeamBoxBodyHeight = Math.min(
+    Number.POSITIVE_INFINITY,
+    ...columns.flatMap((column) =>
+      column.boxes
+        .filter((box) => box.teams.length > 0 && box.revealedMatches.length === 0)
+        .map(() => getSwissBoxBodyHeight(column.boxes.length)),
+    ),
+  );
+  const minimumRevealedBoxBodyHeight = Math.min(
+    Number.POSITIVE_INFINITY,
+    ...columns.flatMap((column) =>
+      column.boxes
+        .filter((box) => box.revealedMatches.length > 0)
+        .map(() => getSwissBoxBodyHeight(column.boxes.length)),
+    ),
+  );
+  const swissTeamRowDensity: "regular" | "compact" | "nano" =
+    minimumTeamBoxBodyHeight === Number.POSITIVE_INFINITY ||
+    minimumTeamBoxBodyHeight >= swissRegularTeamRowHeight + swissRowSafetyPx
+      ? "regular"
+      : minimumTeamBoxBodyHeight >= swissCompactTeamRowHeight + swissRowSafetyPx
+        ? "compact"
+        : "nano";
+  const swissTeamRowHeight =
+    swissTeamRowDensity === "nano"
+      ? swissNanoTeamRowHeight
+      : swissTeamRowDensity === "compact"
+        ? swissCompactTeamRowHeight
+        : swissRegularTeamRowHeight;
+  const swissMatchTileDensity: "regular" | "compact" | "micro" | "nano" =
+    minimumRevealedBoxBodyHeight === Number.POSITIVE_INFINITY ||
+    minimumRevealedBoxBodyHeight >= swissRegularMatchRowHeight + swissMatchSafetyPx
+      ? "regular"
+      : minimumRevealedBoxBodyHeight >= swissCompactMatchRowHeight + swissMatchSafetyPx
+        ? "compact"
+        : minimumRevealedBoxBodyHeight >= swissMicroMatchRowHeight + swissMatchSafetyPx
+          ? "micro"
+          : "nano";
+  const swissMatchRowHeight =
+    swissMatchTileDensity === "nano"
+      ? swissNanoMatchRowHeight
+      : swissMatchTileDensity === "micro"
+        ? swissMicroMatchRowHeight
+        : swissMatchTileDensity === "compact"
+          ? swissCompactMatchRowHeight
+          : swissRegularMatchRowHeight;
+  const swissItemWidth =
+    swissMatchTileDensity === "nano"
+      ? swissDensity === "dense"
+        ? 118
+        : 132
+      : swissMatchTileDensity === "micro"
+      ? swissDensity === "dense"
+        ? 140
+        : 154
+      : swissMatchTileDensity === "compact"
+        ? swissDensity === "dense"
+          ? 154
+          : 172
+        : swissDensity === "dense"
+          ? 168
+          : 188;
+  const getRowsThatFit = (
+    itemHeight: number,
+    availableBodyHeight: number,
+    safetyPx: number,
+  ): number => {
+    const safeAvailableHeight = Math.max(1, availableBodyHeight - safetyPx);
+    let rows = Math.max(
+      1,
+      Math.floor((safeAvailableHeight + swissItemGap) / (itemHeight + swissItemGap)),
+    );
+
+    while (
+      rows > 1 &&
+      rows * itemHeight + Math.max(0, rows - 1) * swissItemGap > safeAvailableHeight
+    ) {
+      rows -= 1;
+    }
+
+    return rows;
+  };
+
+  const getSwissBoxColumnLayout = (
+    box: SwissColumn["boxes"][number],
+    boxesInColumn: number,
+  ): { columns: number; rows: number } => {
+    const itemCount = Math.max(
+      box.revealedMatches.length,
+      box.teams.length,
+      box.qualifiedTeams.length,
+      box.eliminatedTeams.length,
+      box.hiddenMatches.length,
+      1,
+    );
+    const itemHeight = box.revealedMatches.length > 0 ? swissMatchRowHeight : swissTeamRowHeight;
+    const itemSafetyPx =
+      box.revealedMatches.length > 0 ? swissMatchSafetyPx : swissRowSafetyPx;
+    const availableBodyHeight = getSwissBoxBodyHeight(boxesInColumn);
+    const rows = getRowsThatFit(itemHeight, availableBodyHeight, itemSafetyPx);
+
+    return {
+      columns: Math.max(1, Math.ceil(itemCount / rows)),
+      rows,
+    };
+  };
+  const getSwissBoxWidth = (columnCount: number): number =>
+    columnCount * swissItemWidth + Math.max(0, columnCount - 1) * swissItemGap + 18;
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
+    <div className="relative h-[100svh] overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.05)_0%,transparent_30%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
+      <TournamentWatermark variant="swiss" />
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         {columns.map((column) => (
           <div
@@ -2113,28 +2551,53 @@ function SwissStageScreen({
         ))}
       </div>
 
-      <main className="relative mx-auto flex h-full max-w-[1880px] flex-col overflow-hidden px-4 py-4 md:px-6 md:py-5">
-        <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <BackButton label="Volver al registro" onClick={onBack} />
-            <div className="mt-3 flex items-center gap-2">
-              <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--accent)]">
-                Paso 4 · Swiss Stage
-              </p>
-              <InfoHint label="Sortea cada tramo y abre solo la mesa que quieras cerrar." />
-            </div>
-            <h1 className="mt-1 text-[clamp(2.8rem,6vw,6.5rem)] font-black leading-[0.9] tracking-normal text-[var(--foreground)]">
-              SWISS STAGE
-            </h1>
+      <main
+        className="swiss-dashboard relative z-10 mx-auto grid h-[100svh] w-full max-w-none grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden px-2 py-2 md:px-3"
+        data-density={viewportProfile.density}
+        data-swiss-density={swissDensity}
+        data-match-density={swissMatchTileDensity}
+        data-team-row-density={swissTeamRowDensity}
+        style={
+          {
+            "--admin-vw": `${viewportProfile.width}px`,
+            "--admin-vh": `${viewportProfile.height}px`,
+            "--swiss-max-rows": maxSwissRows,
+            "--swiss-max-items": maxBoxItems,
+            "--swiss-item-width": `${swissItemWidth}px`,
+            "--swiss-item-gap": `${swissItemGap}px`,
+          } as CSSProperties
+        }
+      >
+        <header className="grid min-h-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-2 py-1.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <button type="button" onClick={onBack} className="swiss-back-button button-secondary">
+              ← Volver al registro
+            </button>
+            <p className="truncate font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--accent)]">
+              Paso 4 · Swiss Stage
+            </p>
+            <InfoHint label="Sortea cada tramo y abre solo la mesa que quieras cerrar." />
           </div>
 
-          <div className="flex min-h-full flex-col items-end justify-between gap-4 text-right">
-            <div className="flex flex-wrap justify-end gap-2">
-              <StageBadge label={`Ronda ${state.currentSwissRound}`} />
+          {nextDrawableGroupLabel ? (
+            <button
+              type="button"
+              onClick={() => onRevealGroup(nextDrawableGroupLabel)}
+              className="swiss-draw-button button-primary"
+            >
+              Sortear {nextDrawableGroupLabel}
+            </button>
+          ) : (
+            <div />
+          )}
+
+          <div className="flex min-w-0 items-center justify-end gap-2 text-right">
+            <div className="flex flex-none flex-wrap justify-end gap-2">
+              <StageBadge label={`Ronda ${state.currentSwissRound} / ${state.swissRoundsPlanned}`} />
               <StageBadge label={`Sync ${formatSyncTime(state.updatedAt)}`} />
               <StageBadge label={state.config.title} />
             </div>
-            <div className="max-w-[min(44vw,620px)]">
+            <div className="hidden max-w-[min(38vw,560px)] lg:block">
               <p className="truncate font-mono text-[9px] uppercase tracking-[0.18em] text-[rgba(242,247,238,0.46)]">
                 URL activa · {state.config.publicBaseUrl || "sin definir"}
               </p>
@@ -2143,131 +2606,345 @@ function SwissStageScreen({
           </div>
         </header>
 
-        <section className="mt-3 flex flex-wrap items-center gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-2">
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--accent)]">
+        <section className="mt-1.5 flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2.5 py-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
             Estado de la ronda
           </span>
           <div className="h-px w-8 bg-[rgba(244,247,239,0.12)]" />
-          <p className="text-sm text-[var(--muted)] md:text-base">
-            Quedan{" "}
+          <p className="text-xs text-[var(--muted)]">
             <span className="font-semibold text-[var(--foreground)]">{pendingMatchesCount}</span>{" "}
-            enfrentamientos por cerrar en esta fase.
+            pendientes
           </p>
         </section>
 
-        <section className="mt-4 min-h-0 flex-1 overflow-hidden">
-          <div className="flex h-full min-w-0 gap-4 overflow-hidden pr-2">
-            {columns.map((column) => (
-              <div key={column.depth} className="flex h-full w-[clamp(210px,16vw,300px)] flex-none flex-col">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted-soft)]">
-                    tramo {column.depth}
+        <section ref={swissBoardMeasureRef} className="mt-1.5 min-h-0 overflow-hidden">
+          {showFinalClassification ? (
+            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[8px] border border-[var(--accent-border)] bg-[var(--surface-inset)] shadow-[0_22px_80px_rgba(124,255,79,0.1)]">
+              <div className="flex flex-none items-center justify-between gap-3 border-b border-[var(--accent-border)] bg-[linear-gradient(90deg,#7cff4f,#a6ff82)] px-4 py-2 text-[var(--accent-ink)]">
+                <div>
+                  <p className="font-mono text-[10px] uppercase tracking-[0.22em]">
+                    Clasificación final
                   </p>
-                  <div className="h-px flex-1 bg-[rgba(244,247,239,0.10)]" />
+                  <p className="mt-0.5 text-sm font-semibold">
+                    Top 4 cerrado. Puedes pasar a semifinales cuando quieras.
+                  </p>
                 </div>
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em]">
+                  {finalClassificationItems.length} parejas
+                </span>
+              </div>
 
-                <div className="min-h-0 flex-1 space-y-3 overflow-hidden">
-                  {column.boxes.map((box) => {
-                    const hasContent = box.matches.length > 0 || box.teams.length > 0;
-                    const shouldShowDrawButton =
-                      box.isEditable &&
-                      box.hiddenMatches.length > 0 &&
-                      box.revealedMatches.length === 0;
-
-                    return (
-                      <div
-                        key={box.label}
-                        className={`relative overflow-hidden rounded-[8px] border ${
-                          box.isEditable
-                            ? "border-[var(--accent)] shadow-[0_18px_48px_rgba(124,255,79,0.14)]"
-                            : "border-[var(--stroke)]"
-                        } ${hasContent ? "bg-[var(--surface-inset)]" : "bg-[rgba(11,16,12,0.72)]"}`}
+              <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fit,minmax(210px,1fr))] content-start gap-2 overflow-hidden p-3">
+                {finalClassificationItems.map(({ team, rank, topRank }) => (
+                  <article
+                    key={`${team.id}-final-classification`}
+                    className={`flex min-w-0 items-center justify-between gap-2 rounded-[8px] border px-2.5 py-2 ${
+                      topRank
+                        ? "border-[var(--accent-border)] bg-[var(--accent-soft)]"
+                        : "border-[var(--stroke)] bg-[var(--surface-strong)]"
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span
+                        className={`flex h-7 w-8 flex-none items-center justify-center rounded-[7px] font-mono text-[11px] font-bold ${
+                          topRank
+                            ? "bg-[var(--accent)] text-[var(--accent-ink)]"
+                            : "bg-[var(--surface)] text-[var(--muted)]"
+                        }`}
                       >
-                        <div
-                          className={`flex items-center justify-between border-b px-4 py-3 ${
-                            box.isEditable
-                              ? "border-[var(--accent-border)] bg-[linear-gradient(90deg,#7cff4f,#a6ff82)] text-[var(--accent-ink)]"
-                              : "border-[var(--stroke)] bg-[#f4f7ef] text-[var(--background)]"
-                          }`}
-                        >
-                          <span className="font-mono text-lg font-semibold tracking-[0.12em]">
-                            {box.label}
-                          </span>
-                          <span className="font-mono text-[10px] uppercase tracking-[0.18em]">
-                            {shouldShowDrawButton
-                              ? "por sortear"
-                              : box.revealedMatches.length > 0
-                                ? "mesas"
-                                : box.teams.length
-                                  ? "estado"
-                                  : "vacío"}
-                          </span>
-                        </div>
-
-                        <div className="min-h-[clamp(120px,18vh,220px)] p-3">
-                          {box.revealedMatches.length > 0 ? (
-                            <div className="space-y-2">
-                              {box.revealedMatches.map((match) => (
-                                <MatchTile
-                                  key={match.id}
-                                  match={match}
-                                  teamsById={teamsById}
-                                  pointsOnlyMode={pointsOnlyMode}
-                                  onOpen={onOpenMatch}
-                                />
-                              ))}
-                            </div>
-                          ) : box.teams.length > 0 ? (
-                            <div className="space-y-2">
-                              {box.teams.map((team, index) => (
-                                <div
-                                  key={team.id}
-                                  className="stagger-rise flex items-center justify-between gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3"
-                                  style={{ animationDelay: `${index * 70}ms` }}
-                                >
-                                  <div className="flex min-w-0 items-center gap-4">
-                                    <TeamFaces team={team} size="md" />
-                                    <div className="min-w-0">
-                                      <p className="truncate text-base font-semibold text-[var(--foreground)]">
-                                        {team.name}
-                                      </p>
-                                      <p className="truncate text-[11px] text-[var(--muted-soft)]">
-                                        {playerName(team, 0)} · {playerName(team, 1)}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
-                                    {team.wins}-{team.losses}
-                                  </span>
-                                </div>
-                              ))}
-
-                              {shouldShowDrawButton ? (
-                                <button
-                                  type="button"
-                                  onClick={() => onRevealGroup(box.label)}
-                                  className="button-primary mt-2 w-full"
-                                >
-                                  Sortear tramo {box.label}
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <div className="flex min-h-[clamp(100px,15vh,180px)] items-center justify-center text-center text-sm leading-6 text-[var(--muted-soft)]">
-                              Caja preparada para este balance.
-                            </div>
-                          )}
-                        </div>
+                        {rank}
+                      </span>
+                      <TeamFaces team={team} size="xxs" />
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-semibold text-[var(--foreground)]">
+                          {team.name}
+                        </p>
+                        <p className="font-mono text-[8px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                          {team.wins}-{team.losses} · {team.pointsWon} pts
+                        </p>
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                    <span
+                      className={`font-mono text-[9px] font-bold uppercase tracking-[0.14em] ${
+                        topRank ? "text-[var(--accent)]" : "text-[var(--muted-soft)]"
+                      }`}
+                    >
+                      {topRank ? `Top ${topRank}` : `#${rank}`}
+                    </span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : (
+          <div className="swiss-board flex h-full min-w-0 gap-2 overflow-x-auto overflow-y-hidden pb-1 pr-2">
+            {columns.map((column) => (
+              <div
+                key={column.depth}
+                className="swiss-column flex h-full w-max flex-none flex-col items-start gap-2"
+                aria-label={`Tramo ${column.depth}`}
+              >
+                {column.boxes.map((box) => {
+                  const hasQualifiedTeams = box.qualifiedTeams.length > 0;
+                  const hasEliminatedTeams = box.eliminatedTeams.length > 0;
+                  const hasContent =
+                    box.matches.length > 0 ||
+                    box.teams.length > 0 ||
+                    hasQualifiedTeams ||
+                    hasEliminatedTeams;
+                  const shouldShowDrawButton =
+                    box.isEditable &&
+                    box.hiddenMatches.length > 0 &&
+                    box.revealedMatches.length === 0;
+                  const boxColumnLayout = getSwissBoxColumnLayout(
+                    box,
+                    column.boxes.length,
+                  );
+                  const revealedMatchColumns = chunkByRows(
+                    box.revealedMatches,
+                    boxColumnLayout.rows,
+                  );
+                  const teamColumns = chunkByRows(box.teams, boxColumnLayout.rows);
+                  const qualifiedTeamColumns = chunkByRows(
+                    box.qualifiedTeams,
+                    boxColumnLayout.rows,
+                  );
+                  const eliminatedTeamColumns = chunkByRows(
+                    box.eliminatedTeams,
+                    boxColumnLayout.rows,
+                  );
+                  const renderedColumnCount =
+                    box.revealedMatches.length > 0
+                      ? revealedMatchColumns.length
+                      : box.teams.length > 0
+                        ? teamColumns.length
+                        : hasQualifiedTeams
+                          ? qualifiedTeamColumns.length
+                        : hasEliminatedTeams
+                          ? eliminatedTeamColumns.length
+                        : 1;
+                  const boxWidth = getSwissBoxWidth(renderedColumnCount);
+                  const teamRowClass =
+                    swissTeamRowDensity === "nano"
+                      ? "swiss-team-row stagger-rise flex min-h-0 items-center justify-between gap-1 rounded-[7px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-1.5 py-0.5"
+                      : swissTeamRowDensity === "compact"
+                        ? "swiss-team-row stagger-rise flex min-h-0 items-center justify-between gap-1.5 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2 py-0.5"
+                        : "swiss-team-row stagger-rise flex min-h-0 items-center justify-between gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2 py-1";
+                  const teamRowFaceSize =
+                    swissTeamRowDensity === "nano"
+                      ? "xxs"
+                      : swissTeamRowDensity === "compact"
+                        ? "xxs"
+                        : "xs";
+                  const teamRowTextClass =
+                    swissTeamRowDensity === "nano"
+                      ? "text-[10px] leading-3"
+                      : swissTeamRowDensity === "compact"
+                        ? "text-[11px] leading-3"
+                        : "text-xs";
+                  const teamRowScoreClass =
+                    swissTeamRowDensity === "nano"
+                      ? "text-[8px] tracking-[0.14em]"
+                      : "text-[9px] tracking-[0.18em]";
+
+                  return (
+                    <div
+                      key={box.label}
+                      className={`swiss-box relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[8px] border ${
+                        hasQualifiedTeams && !box.matches.length && !box.teams.length
+                          ? "border-[var(--accent)] shadow-[0_18px_48px_rgba(124,255,79,0.16)]"
+                          : hasEliminatedTeams && !box.matches.length && !box.teams.length
+                          ? "border-rose-500/60 shadow-[0_18px_48px_rgba(244,63,94,0.12)]"
+                          : box.isEditable
+                          ? "border-[var(--accent)] shadow-[0_18px_48px_rgba(124,255,79,0.14)]"
+                          : "border-[var(--stroke)]"
+                      } ${
+                        hasQualifiedTeams && !box.matches.length && !box.teams.length
+                          ? "bg-[rgba(124,255,79,0.08)]"
+                          : hasEliminatedTeams && !box.matches.length && !box.teams.length
+                          ? "bg-rose-950/20"
+                          : hasContent
+                            ? "bg-[var(--surface-inset)]"
+                            : "bg-[rgba(11,16,12,0.72)]"
+                      }`}
+                      style={{
+                        width: `${boxWidth}px`,
+                        minWidth: `${boxWidth}px`,
+                        maxWidth: `${boxWidth}px`,
+                        justifySelf: "start",
+                      }}
+                    >
+                      <div
+                        className={`swiss-box-header flex flex-none items-center justify-between border-b px-3 py-2 ${
+                          hasQualifiedTeams && !box.matches.length && !box.teams.length
+                            ? "border-[var(--accent-border)] bg-[linear-gradient(90deg,#7cff4f,#a6ff82)] text-[var(--accent-ink)]"
+                            : hasEliminatedTeams && !box.matches.length && !box.teams.length
+                            ? "border-rose-400/30 bg-rose-500/18 text-rose-100"
+                            : box.isEditable
+                            ? "border-[var(--accent-border)] bg-[linear-gradient(90deg,#7cff4f,#a6ff82)] text-[var(--accent-ink)]"
+                            : "border-[var(--stroke)] bg-[#f4f7ef] text-[var(--background)]"
+                        }`}
+                      >
+                        <span className="font-mono text-base font-semibold tracking-[0.12em]">
+                          {box.label}
+                        </span>
+                        <span className="font-mono text-[9px] uppercase tracking-[0.18em]">
+                          {shouldShowDrawButton
+                            ? "por sortear"
+                            : box.revealedMatches.length > 0
+                              ? "mesas"
+                              : box.teams.length
+                                ? "estado"
+                                : hasQualifiedTeams
+                                  ? "clasificados"
+                                : hasEliminatedTeams
+                                  ? "eliminados"
+                                : "vacío"}
+                        </span>
+                      </div>
+
+                      <div className="swiss-box-body min-h-0 flex-1 overflow-hidden p-2">
+                        {box.revealedMatches.length > 0 ? (
+                          <div className="swiss-items-columns h-full overflow-hidden">
+                            {revealedMatchColumns.map((matchColumn, columnIndex) => (
+                              <div
+                                key={`${box.label}-match-column-${columnIndex}`}
+                                className="swiss-items-column"
+                                style={{ width: `${swissItemWidth}px` }}
+                              >
+                                {matchColumn.map((match) => (
+                                  <MatchTile
+                                    key={match.id}
+                                    match={match}
+                                    teamsById={teamsById}
+                                    pointsOnlyMode={pointsOnlyMode}
+                                    onOpen={onOpenMatch}
+                                    density={swissMatchTileDensity}
+                                  />
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        ) : box.teams.length > 0 ? (
+                          <div className="swiss-items-columns h-full overflow-hidden">
+                            {teamColumns.map((teamColumn, columnIndex) => (
+                              <div
+                                key={`${box.label}-team-column-${columnIndex}`}
+                                className="swiss-items-column"
+                                style={{ width: `${swissItemWidth}px` }}
+                              >
+                                {teamColumn.map((team, rowIndex) => {
+                                  const itemIndex = columnIndex * boxColumnLayout.rows + rowIndex;
+
+                                  if (team) {
+                                    return (
+                                      <div
+                                        key={team.id}
+                                        className={teamRowClass}
+                                        style={{ animationDelay: `${itemIndex * 45}ms` }}
+                                      >
+                                        <div className="flex min-w-0 items-center gap-1.5">
+                                          <TeamFaces team={team} size={teamRowFaceSize} />
+                                          <p className={`min-w-0 truncate font-semibold text-[var(--foreground)] ${teamRowTextClass}`}>
+                                            {team.name}
+                                          </p>
+                                        </div>
+                                        <span className={`font-mono uppercase text-[var(--accent)] ${teamRowScoreClass}`}>
+                                          {team.wins}-{team.losses}
+                                        </span>
+                                      </div>
+                                    );
+                                  }
+
+                                  return null;
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                        ) : hasQualifiedTeams ? (
+                          <div className="swiss-items-columns h-full overflow-hidden">
+                            {qualifiedTeamColumns.map((teamColumn, columnIndex) => (
+                              <div
+                                key={`${box.label}-qualified-column-${columnIndex}`}
+                                className="swiss-items-column"
+                                style={{ width: `${swissItemWidth}px` }}
+                              >
+                                {teamColumn.map(({ team, topRank }, rowIndex) => {
+                                  const itemIndex = columnIndex * boxColumnLayout.rows + rowIndex;
+
+                                  return (
+                                    <div
+                                      key={`${team.id}-top-${topRank}`}
+                                      className="swiss-team-row stagger-rise flex min-h-0 items-center justify-between gap-1.5 rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2 py-1"
+                                      style={{ animationDelay: `${itemIndex * 45}ms` }}
+                                    >
+                                      <div className="flex min-w-0 items-center gap-1.5">
+                                        <TeamFaces team={team} size="xxs" />
+                                        <div className="min-w-0">
+                                          <p className="min-w-0 truncate text-[11px] font-semibold leading-3 text-[var(--foreground)]">
+                                            {team.name}
+                                          </p>
+                                          <p className="mt-0.5 font-mono text-[8px] uppercase tracking-[0.14em] text-[var(--muted)]">
+                                            {team.pointsWon} pts
+                                          </p>
+                                        </div>
+                                      </div>
+                                      <span className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">
+                                        Top {topRank}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                        ) : hasEliminatedTeams ? (
+                          <div className="swiss-items-columns h-full overflow-hidden">
+                            {eliminatedTeamColumns.map((teamColumn, columnIndex) => (
+                              <div
+                                key={`${box.label}-eliminated-column-${columnIndex}`}
+                                className="swiss-items-column"
+                                style={{ width: `${swissItemWidth}px` }}
+                              >
+                                {teamColumn.map((team, rowIndex) => {
+                                  const itemIndex = columnIndex * boxColumnLayout.rows + rowIndex;
+
+                                  return (
+                                    <div
+                                      key={team.id}
+                                      className="swiss-team-row stagger-rise flex min-h-0 items-center justify-between gap-1.5 rounded-[8px] border border-rose-400/26 bg-rose-500/10 px-2 py-0.5"
+                                      style={{ animationDelay: `${itemIndex * 45}ms` }}
+                                    >
+                                      <div className="flex min-w-0 items-center gap-1.5">
+                                        <TeamFaces team={team} size="xxs" />
+                                        <p className="min-w-0 truncate text-[11px] font-semibold leading-3 text-rose-100">
+                                          {team.name}
+                                        </p>
+                                      </div>
+                                      <span className="font-mono text-[8px] uppercase tracking-[0.14em] text-rose-200/80">
+                                        fuera
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex h-full items-center justify-center text-center text-xs leading-5 text-[var(--muted-soft)]">
+                            Caja preparada
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
+          )}
         </section>
 
-        <footer className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.86)] px-4 py-3">
+        <footer className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.86)] px-2.5 py-1.5">
           <div className="flex flex-wrap gap-2">
             <StageBadge label={`${currentRoundMatches.length} enfrentamientos`} />
             <StageBadge
@@ -2281,6 +2958,27 @@ function SwissStageScreen({
             />
           </div>
 
+          {topCutFooterItems.length > 0 ? (
+            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-1.5 px-2">
+              {topCutFooterItems.map(({ team, topRank }) => (
+                <div
+                  key={`${team.id}-footer-top-${topRank}`}
+                  className="flex min-w-[8.8rem] max-w-[12rem] items-center justify-between gap-2 rounded-[999px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1"
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <TeamFaces team={team} size="xxs" />
+                    <span className="min-w-0 truncate text-[11px] font-semibold text-[var(--foreground)]">
+                      {team.name}
+                    </span>
+                  </div>
+                  <span className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">
+                    Top {topRank}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap gap-3">
             <button type="button" onClick={onSync} disabled={isSyncing} className="button-secondary">
               {isSyncing ? "Sincronizando" : "Sincronizar"}
@@ -2288,7 +2986,7 @@ function SwissStageScreen({
             <button
               type="button"
               onClick={onAdvance}
-              disabled={isPending || !roundComplete}
+              disabled={isPending || (!roundComplete && !canAdvanceToTopCut)}
               className="button-primary"
             >
               {advanceLabel}
@@ -2440,7 +3138,7 @@ function PlayoffStageScreen({
         </div>
       }
     >
-      <div className="space-y-6">
+      <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
         <section className="flex flex-wrap items-center gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3">
           <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--accent)]">
             Estado de la fase
@@ -2453,16 +3151,64 @@ function PlayoffStageScreen({
           </p>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-2">
-          {currentMatches.map((match) => (
-            <MatchTile
-              key={match.id}
-              match={match}
-              teamsById={teamsById}
-              pointsOnlyMode={pointsOnlyMode}
-              onOpen={onOpenMatch}
-            />
-          ))}
+        <section className="relative grid min-h-0 items-center gap-4 overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[radial-gradient(circle_at_center,rgba(124,255,79,0.12),transparent_38%),var(--surface-inset)] p-4 lg:grid-cols-[minmax(240px,1fr)_minmax(180px,0.7fr)_minmax(240px,1fr)]">
+          {isSemifinals ? (
+            <>
+              <div className="min-w-0">
+                {currentMatches[0] ? (
+                  <MatchTile
+                    match={currentMatches[0]}
+                    teamsById={teamsById}
+                    pointsOnlyMode={pointsOnlyMode}
+                    onOpen={onOpenMatch}
+                  />
+                ) : null}
+              </div>
+              <div className="flex h-full min-h-52 flex-col items-center justify-center gap-4">
+                <div className="h-px w-full bg-[linear-gradient(90deg,transparent,var(--accent),transparent)]" />
+                <div className="grid h-40 w-40 place-items-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] text-center shadow-[0_0_80px_rgba(124,255,79,0.12)]">
+                  <div>
+                    <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">
+                      camino
+                    </p>
+                    <p className="mt-1 text-4xl font-black tracking-tight text-[var(--accent)]">
+                      COPA
+                    </p>
+                  </div>
+                </div>
+                <div className="h-px w-full bg-[linear-gradient(90deg,transparent,var(--accent),transparent)]" />
+              </div>
+              <div className="min-w-0">
+                {currentMatches[1] ? (
+                  <MatchTile
+                    match={currentMatches[1]}
+                    teamsById={teamsById}
+                    pointsOnlyMode={pointsOnlyMode}
+                    onOpen={onOpenMatch}
+                  />
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="col-span-full mx-auto w-full max-w-2xl">
+              <div className="mb-4 text-center">
+                <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--accent)]">
+                  última mesa
+                </p>
+                <h3 className="mt-1 text-5xl font-black tracking-tight text-[var(--foreground)]">
+                  FINAL
+                </h3>
+              </div>
+              {currentMatches[0] ? (
+                <MatchTile
+                  match={currentMatches[0]}
+                  teamsById={teamsById}
+                  pointsOnlyMode={pointsOnlyMode}
+                  onOpen={onOpenMatch}
+                />
+              ) : null}
+            </div>
+          )}
         </section>
 
         <footer className="flex flex-wrap items-center justify-between gap-4 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.82)] px-5 py-4">
@@ -2562,10 +3308,7 @@ function CompletedTournamentScreen({
   state: TournamentState;
   onBack: () => void;
 }) {
-  const structure = getTournamentStructure(state.config.teamCount, state.config.format);
-  const isSwissClassificationEnd =
-    structure.entryStage === "swiss" && state.config.format === "swiss_only";
-  const title = isSwissClassificationEnd ? "Clasificación Final" : "Torneo Cerrado";
+  const title = "CLASIFICACIÓN";
 
   return (
     <ScreenFrame
@@ -2580,9 +3323,9 @@ function CompletedTournamentScreen({
         </div>
       }
     >
-      <div className="space-y-6">
+      <div className="flex h-full min-h-0 flex-col gap-4">
         {state.championTeamId ? (
-          <section className="grid gap-4 md:grid-cols-2">
+          <section className="grid flex-none gap-4 md:grid-cols-2">
             {[state.championTeamId, state.runnerUpTeamId]
               .filter(Boolean)
               .map((teamId, index) => {
@@ -2615,44 +3358,50 @@ function CompletedTournamentScreen({
           </section>
         ) : null}
 
-        <section className="overflow-x-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)]">
-          <div className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 border-b border-[var(--stroke)] bg-[var(--surface-strong)] px-5 py-4 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
-            <span>Puesto</span>
-            <span>Equipo</span>
-            <span>Balance</span>
-            <span>Buchholz</span>
-            <span>Vacas</span>
-            <span>Juegos</span>
-            <span>Puntos</span>
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)]">
+          <div className="overflow-x-auto">
+            <div className="min-w-[920px]">
+              <div className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 border-b border-[var(--stroke)] bg-[var(--surface-strong)] px-5 py-3 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
+                <span>Puesto</span>
+                <span>Equipo</span>
+                <span>Balance</span>
+                <span>Buchholz</span>
+                <span>Vacas</span>
+                <span>Juegos</span>
+                <span>Puntos</span>
+              </div>
+            </div>
           </div>
 
-          <div className="divide-y divide-[var(--stroke)]">
-            {state.teams.map((team, index) => (
-              <div
-                key={team.id}
-                className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 px-5 py-4"
-              >
-                <div className="text-lg font-semibold text-[var(--foreground)]">{index + 1}</div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-3">
-                    <TeamFaces team={team} size="sm" />
-                    <div className="min-w-0">
-                      <p className="truncate text-base font-semibold text-[var(--foreground)]">{team.name}</p>
-                      <p className="truncate text-sm text-[var(--muted-soft)]">
-                        {playerName(team, 0)} · {playerName(team, 1)}
-                      </p>
+          <div className="min-h-0 flex-1 overflow-auto">
+            <div className="min-w-[920px] divide-y divide-[var(--stroke)]">
+              {state.teams.map((team, index) => (
+                <div
+                  key={team.id}
+                  className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 px-5 py-3"
+                >
+                  <div className="text-lg font-semibold text-[var(--foreground)]">{index + 1}</div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-3">
+                      <TeamFaces team={team} size="sm" />
+                      <div className="min-w-0">
+                        <p className="truncate text-base font-semibold text-[var(--foreground)]">{team.name}</p>
+                        <p className="truncate text-sm text-[var(--muted-soft)]">
+                          {playerName(team, 0)} · {playerName(team, 1)}
+                        </p>
+                      </div>
                     </div>
                   </div>
+                  <div className="text-sm font-semibold text-[var(--foreground)]">
+                    {team.wins}-{team.losses}
+                  </div>
+                  <div className="text-sm text-[var(--muted)]">{team.buchholz}</div>
+                  <div className="text-sm text-[var(--muted)]">{team.vacasWon}</div>
+                  <div className="text-sm text-[var(--muted)]">{team.gamesWon}</div>
+                  <div className="text-sm text-[var(--muted)]">{team.pointsWon}</div>
                 </div>
-                <div className="text-sm font-semibold text-[var(--foreground)]">
-                  {team.wins}-{team.losses}
-                </div>
-                <div className="text-sm text-[var(--muted)]">{team.buchholz}</div>
-                <div className="text-sm text-[var(--muted)]">{team.vacasWon}</div>
-                <div className="text-sm text-[var(--muted)]">{team.gamesWon}</div>
-                <div className="text-sm text-[var(--muted)]">{team.pointsWon}</div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </section>
       </div>
@@ -2966,7 +3715,14 @@ export function TournamentFlow({
     runMutation(
       () => postAction({ action: "advancePhase" }),
       "Fase actualizada.",
-      () => {
+      (nextState) => {
+        if (nextState.stage === "swiss") {
+          setForcedScreen("swiss");
+        } else if (nextState.stage === "semifinals" || nextState.stage === "final") {
+          setForcedScreen("topcut");
+        } else {
+          setForcedScreen(null);
+        }
         setActiveMatchId(null);
       },
     );
@@ -3070,11 +3826,23 @@ export function TournamentFlow({
     return "Continuar fase actual";
   }, [existingStateDetail, hasExistingProgress, state.stage]);
 
-  const screen: Screen = forcedScreen
-    ? forcedScreen
-    : needsPublicUrlGate
-      ? "url"
-      : "setup";
+  const stageScreen: Screen =
+    state.stage === "swiss"
+      ? "swiss"
+      : state.stage === "semifinals" || state.stage === "final" || state.stage === "completed"
+        ? "topcut"
+        : needsPublicUrlGate
+          ? "url"
+          : "setup";
+  const screen: Screen =
+    forcedScreen === "setup" ||
+    forcedScreen === "url" ||
+    forcedScreen === "registration" ||
+    (forcedScreen === "swiss" && state.stage === "swiss") ||
+    (forcedScreen === "topcut" &&
+      (state.stage === "semifinals" || state.stage === "final" || state.stage === "completed"))
+      ? forcedScreen
+      : stageScreen;
 
   if (screen === "url") {
     return (

@@ -3,10 +3,10 @@
 :root {
   --background: #020403;
   --foreground: #f2f7ee;
-  --surface: #0b100c;
-  --surface-strong: #121813;
-  --surface-raised: #182016;
-  --surface-inset: #050806;
+  --surface: rgba(11, 16, 12, 0.78);
+  --surface-strong: rgba(18, 24, 19, 0.84);
+  --surface-raised: rgba(24, 32, 22, 0.9);
+  --surface-inset: rgba(5, 8, 6, 0.72);
   --stroke: rgba(242, 247, 238, 0.14);
   --stroke-strong: rgba(242, 247, 238, 0.22);
   --muted: #a8b3a1;
@@ -380,6 +380,139 @@ img {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.swiss-dashboard {
+  container-type: size;
+  --swiss-gap: clamp(0.4rem, 0.45cqw, 0.65rem);
+}
+
+.swiss-board,
+.swiss-column {
+  gap: var(--swiss-gap) !important;
+}
+
+.swiss-column {
+  justify-items: start;
+}
+
+.swiss-board::-webkit-scrollbar {
+  height: 0.65rem;
+}
+
+.swiss-back-button {
+  min-height: 0;
+  padding: 0.32rem 0.58rem;
+  font-size: 0.56rem;
+  letter-spacing: 0.14em;
+}
+
+.swiss-dashboard .info-hint-button {
+  height: 1.25rem;
+  width: 1.25rem;
+  font-size: 0.65rem;
+}
+
+.swiss-draw-button {
+  min-height: 0;
+  padding: 0.5rem 1.05rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+}
+
+.swiss-box-header {
+  min-height: clamp(2rem, 3.5vh, 2.45rem);
+}
+
+.swiss-box-body {
+  padding: clamp(0.35rem, 0.5cqh, 0.55rem) !important;
+}
+
+.swiss-team-row,
+.match-tile {
+  min-height: 0;
+}
+
+.swiss-items-columns {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--swiss-item-gap, 0.375rem);
+}
+
+.swiss-items-column {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  flex-direction: column;
+  gap: var(--swiss-item-gap, 0.375rem);
+}
+
+.swiss-dashboard[data-swiss-density="dense"] .swiss-box-header {
+  min-height: 1.7rem;
+  padding-block: 0.32rem;
+}
+
+.swiss-dashboard[data-swiss-density="dense"] .swiss-box-header span:first-child {
+  font-size: 0.82rem;
+}
+
+.swiss-dashboard[data-swiss-density="dense"] .swiss-items-columns {
+  gap: var(--swiss-item-gap, 0.3125rem);
+}
+
+.swiss-dashboard[data-swiss-density="dense"] .swiss-items-column {
+  gap: var(--swiss-item-gap, 0.3125rem);
+}
+
+.swiss-dashboard[data-swiss-density="dense"] .match-tile .h-10,
+.swiss-dashboard[data-swiss-density="dense"] .match-tile .h-8 {
+  height: 1.65rem;
+}
+
+.swiss-dashboard[data-density="compact"] {
+  --swiss-gap: 0.35rem;
+}
+
+.swiss-dashboard[data-density="compact"] header h1 {
+  font-size: clamp(1.65rem, 3.4vw, 3.2rem);
+}
+
+.swiss-dashboard[data-density="compact"] .button-primary,
+.swiss-dashboard[data-density="compact"] .button-secondary {
+  padding: 0.48rem 0.65rem;
+  font-size: 0.58rem;
+}
+
+.tournament-watermark {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.tournament-watermark__logo {
+  width: min(48vw, 42rem);
+  max-width: 74vw;
+  max-height: 54vh;
+  object-fit: contain;
+  opacity: 0.14;
+  filter: saturate(0.82) brightness(1.12) contrast(1.04);
+}
+
+.tournament-watermark--swiss .tournament-watermark__logo {
+  width: min(42vw, 36rem);
+  max-height: 46vh;
+  opacity: 0.1;
+}
+
+.tournament-watermark--mobile .tournament-watermark__logo {
+  width: min(78vw, 24rem);
+  max-height: 42vh;
+  opacity: 0.08;
+}
+
 @media (max-height: 820px) {
   .admin-header {
     padding: 0.85rem;
@@ -409,6 +542,24 @@ img {
 
   .registration-qr-card h3 {
     display: none;
+  }
+
+  .swiss-dashboard {
+    --swiss-gap: 0.35rem;
+  }
+
+  .swiss-dashboard header,
+  .swiss-dashboard footer {
+    padding: 0.55rem;
+  }
+
+  .swiss-dashboard h1 {
+    font-size: clamp(1.55rem, 3.2vw, 3rem);
+  }
+
+  .swiss-box-header {
+    min-height: 1.65rem;
+    padding-block: 0.3rem;
   }
 }
 

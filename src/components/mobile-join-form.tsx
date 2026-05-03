@@ -4,6 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { InfoHint } from "@/components/info-hint";
+import { TournamentWatermark } from "@/components/tournament-watermark";
 import type {
   Match,
   Participant,
@@ -513,7 +514,8 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   return (
     <main className="relative min-h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.055)_0%,transparent_34%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
-      <div className="relative mx-auto flex min-h-screen w-full max-w-xl flex-col px-4 py-8">
+      <TournamentWatermark variant="mobile" />
+      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-xl flex-col px-4 py-8">
         <section className="overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] shadow-[0_40px_120px_rgba(0,0,0,0.24)]">
           <div className="border-b border-[var(--stroke)] bg-[linear-gradient(135deg,rgba(124,255,79,0.13),rgba(18,24,19,0.98)_44%,#0b100c)] px-6 py-7 text-[var(--foreground)]">
             {participant ? (
