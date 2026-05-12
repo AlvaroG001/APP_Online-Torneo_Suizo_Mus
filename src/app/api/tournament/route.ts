@@ -8,6 +8,8 @@ import {
   confirmManualTeam,
   createRandomTeams,
   deleteBotParticipantDuringSetup,
+  deleteParticipantDuringSetup,
+  forceSemifinalsFromCurrentStandings,
   postChatMessage,
   prepareManualTeams,
   renameParticipantDuringSetup,
@@ -18,6 +20,7 @@ import {
   setPublicBaseUrl,
   setTeamCustomName,
   startTournament,
+  submitMobileMatchResult,
 } from "@/lib/tournament";
 
 export const dynamic = "force-dynamic";
@@ -68,6 +71,12 @@ export async function POST(request: Request) {
           body.payload as Parameters<typeof deleteBotParticipantDuringSetup>[1],
         );
         break;
+      case "deleteParticipantDuringSetup":
+        nextState = deleteParticipantDuringSetup(
+          current,
+          body.payload as Parameters<typeof deleteParticipantDuringSetup>[1],
+        );
+        break;
       case "assignParticipantToTeamSlot":
         nextState = assignParticipantToTeamSlot(
           current,
@@ -108,8 +117,17 @@ export async function POST(request: Request) {
           body.payload as Parameters<typeof recordMatchResult>[1],
         );
         break;
+      case "submitMobileMatchResult":
+        nextState = submitMobileMatchResult(
+          current,
+          body.payload as Parameters<typeof submitMobileMatchResult>[1],
+        );
+        break;
       case "advancePhase":
         nextState = advanceTournament(current);
+        break;
+      case "forceSemifinalsFromCurrentStandings":
+        nextState = forceSemifinalsFromCurrentStandings(current);
         break;
       case "returnToSetup":
         nextState = returnToSetupPreparation(current);

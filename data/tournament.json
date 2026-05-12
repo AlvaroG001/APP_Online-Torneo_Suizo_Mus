@@ -1,34 +1,386 @@
 {
   "config": {
     "title": "Riañcimo",
-    "teamCount": 25,
+    "teamCount": 4,
     "vacasPerMatch": 1,
     "gamesPerVaca": 1,
     "targetPoints": 30,
-    "publicBaseUrl": "http://192.168.0.101:3000",
+    "publicBaseUrl": "http://192.168.0.26:3000",
     "format": "swiss_top4"
   },
-  "stage": "setup",
-  "swissRoundsPlanned": 5,
+  "stage": "final",
+  "swissRoundsPlanned": 0,
   "currentSwissRound": 0,
-  "topCut": 4,
+  "topCut": 0,
   "participants": [
     {
-      "id": "effe2609-c63a-4496-abd7-a51d07dacfb2",
-      "deviceId": "device-ooscfv7vgne",
+      "id": "3132df4a-251f-42c4-ab46-03e1ee1c022e",
+      "deviceId": "device-8c22kgz0mpl",
       "name": "Álvaro",
-      "photoUrl": "/api/uploads/device-ooscfv7vgne-1777829841127.jpg",
-      "teamId": null,
-      "registeredAt": "2026-05-03T17:37:21.129Z",
-      "updatedAt": "2026-05-03T17:37:21.129Z"
+      "photoUrl": "/api/uploads/device-8c22kgz0mpl-1778615924292.jpg",
+      "teamId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+      "registeredAt": "2026-05-12T19:58:44.294Z",
+      "updatedAt": "2026-05-12T19:58:44.294Z"
+    },
+    {
+      "id": "b925b6b5-234a-4a78-b369-50625414f580",
+      "deviceId": "device-igg69a4rxvc",
+      "name": "ana bohueles",
+      "photoUrl": "/api/uploads/device-igg69a4rxvc-1778615944206.jpg",
+      "teamId": "0485efd0-a008-47a0-828a-6206011289f3",
+      "registeredAt": "2026-05-12T19:59:04.207Z",
+      "updatedAt": "2026-05-12T19:59:04.207Z"
+    },
+    {
+      "id": "ebdd5cb3-bf19-4356-b004-b7014299555f",
+      "deviceId": "bot-1",
+      "name": "Bot 1",
+      "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%2320314d%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%234f8cff%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB1%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20",
+      "teamId": "f179a0c5-0035-4bc2-a716-be77eddfd22a",
+      "registeredAt": "2026-05-12T19:59:10.149Z",
+      "updatedAt": "2026-05-12T19:59:10.149Z"
+    },
+    {
+      "id": "c1a4b4f9-5912-4e47-a7bd-cd40bdc13fc0",
+      "deviceId": "bot-2",
+      "name": "Bot 2",
+      "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%23153443%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%2322c1c3%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB2%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20",
+      "teamId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+      "registeredAt": "2026-05-12T19:59:10.811Z",
+      "updatedAt": "2026-05-12T19:59:10.811Z"
+    },
+    {
+      "id": "3a208f11-f3e0-405a-b104-c0677e537885",
+      "deviceId": "bot-3",
+      "name": "Bot 3",
+      "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%232b2141%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%238a5cff%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB3%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20",
+      "teamId": "9dcfca9a-fc52-4137-a5ad-d3bd7f6e50f1",
+      "registeredAt": "2026-05-12T19:59:12.198Z",
+      "updatedAt": "2026-05-12T19:59:12.198Z"
+    },
+    {
+      "id": "328f9b9a-8665-4ae5-80c6-6fd673bc3fb8",
+      "deviceId": "bot-4",
+      "name": "Bot 4",
+      "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%233b2b17%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%23ff9b45%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB4%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20",
+      "teamId": "0485efd0-a008-47a0-828a-6206011289f3",
+      "registeredAt": "2026-05-12T19:59:18.237Z",
+      "updatedAt": "2026-05-12T19:59:18.237Z"
+    },
+    {
+      "id": "e374080a-ebac-440c-b609-35fb8cb9a66b",
+      "deviceId": "bot-5",
+      "name": "Bot 5",
+      "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%231f3b2e%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%235fd483%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB5%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20",
+      "teamId": "9dcfca9a-fc52-4137-a5ad-d3bd7f6e50f1",
+      "registeredAt": "2026-05-12T19:59:20.649Z",
+      "updatedAt": "2026-05-12T19:59:20.649Z"
+    },
+    {
+      "id": "dffd99ce-8119-40b9-9324-18aa7b0a8111",
+      "deviceId": "bot-6",
+      "name": "Bot 6",
+      "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%2320314d%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%234f8cff%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB6%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20",
+      "teamId": "f179a0c5-0035-4bc2-a716-be77eddfd22a",
+      "registeredAt": "2026-05-12T19:59:21.469Z",
+      "updatedAt": "2026-05-12T19:59:21.469Z"
     }
   ],
-  "teams": [],
-  "matches": [],
+  "teams": [
+    {
+      "id": "0485efd0-a008-47a0-828a-6206011289f3",
+      "seed": 2,
+      "label": "Equipo 2",
+      "name": "elpe negordo",
+      "nameIsCustom": true,
+      "confirmed": true,
+      "players": [
+        {
+          "id": "328f9b9a-8665-4ae5-80c6-6fd673bc3fb8",
+          "participantId": "328f9b9a-8665-4ae5-80c6-6fd673bc3fb8",
+          "deviceId": "bot-4",
+          "slot": "A",
+          "name": "Bot 4",
+          "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%233b2b17%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%23ff9b45%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB4%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20"
+        },
+        {
+          "id": "b925b6b5-234a-4a78-b369-50625414f580",
+          "participantId": "b925b6b5-234a-4a78-b369-50625414f580",
+          "deviceId": "device-igg69a4rxvc",
+          "slot": "B",
+          "name": "ana bohueles",
+          "photoUrl": "/api/uploads/device-igg69a4rxvc-1778615944206.jpg"
+        }
+      ],
+      "wins": 2,
+      "losses": 0,
+      "buchholz": 0,
+      "matchesPlayedSwiss": 0,
+      "vacasWon": 2,
+      "gamesWon": 2,
+      "pointsWon": 60,
+      "byeCount": 0,
+      "opponents": [],
+      "status": "active",
+      "lastResult": "W"
+    },
+    {
+      "id": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+      "seed": 1,
+      "label": "Equipo 1",
+      "name": "Cara culos",
+      "nameIsCustom": true,
+      "confirmed": true,
+      "players": [
+        {
+          "id": "3132df4a-251f-42c4-ab46-03e1ee1c022e",
+          "participantId": "3132df4a-251f-42c4-ab46-03e1ee1c022e",
+          "deviceId": "device-8c22kgz0mpl",
+          "slot": "A",
+          "name": "Álvaro",
+          "photoUrl": "/api/uploads/device-8c22kgz0mpl-1778615924292.jpg"
+        },
+        {
+          "id": "c1a4b4f9-5912-4e47-a7bd-cd40bdc13fc0",
+          "participantId": "c1a4b4f9-5912-4e47-a7bd-cd40bdc13fc0",
+          "deviceId": "bot-2",
+          "slot": "B",
+          "name": "Bot 2",
+          "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%23153443%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%2322c1c3%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB2%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20"
+        }
+      ],
+      "wins": 1,
+      "losses": 1,
+      "buchholz": 0,
+      "matchesPlayedSwiss": 0,
+      "vacasWon": 1,
+      "gamesWon": 1,
+      "pointsWon": 40,
+      "byeCount": 0,
+      "opponents": [],
+      "status": "active",
+      "lastResult": "L"
+    },
+    {
+      "id": "f179a0c5-0035-4bc2-a716-be77eddfd22a",
+      "seed": 3,
+      "label": "Equipo 3",
+      "name": "Equipo 3",
+      "nameIsCustom": false,
+      "confirmed": true,
+      "players": [
+        {
+          "id": "ebdd5cb3-bf19-4356-b004-b7014299555f",
+          "participantId": "ebdd5cb3-bf19-4356-b004-b7014299555f",
+          "deviceId": "bot-1",
+          "slot": "A",
+          "name": "Bot 1",
+          "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%2320314d%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%234f8cff%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB1%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20"
+        },
+        {
+          "id": "dffd99ce-8119-40b9-9324-18aa7b0a8111",
+          "participantId": "dffd99ce-8119-40b9-9324-18aa7b0a8111",
+          "deviceId": "bot-6",
+          "slot": "B",
+          "name": "Bot 6",
+          "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%2320314d%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%234f8cff%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB6%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20"
+        }
+      ],
+      "wins": 0,
+      "losses": 1,
+      "buchholz": 0,
+      "matchesPlayedSwiss": 0,
+      "vacasWon": 0,
+      "gamesWon": 0,
+      "pointsWon": 5,
+      "byeCount": 0,
+      "opponents": [],
+      "status": "active",
+      "lastResult": "L"
+    },
+    {
+      "id": "9dcfca9a-fc52-4137-a5ad-d3bd7f6e50f1",
+      "seed": 4,
+      "label": "Equipo 4",
+      "name": "Equipo 4",
+      "nameIsCustom": false,
+      "confirmed": true,
+      "players": [
+        {
+          "id": "3a208f11-f3e0-405a-b104-c0677e537885",
+          "participantId": "3a208f11-f3e0-405a-b104-c0677e537885",
+          "deviceId": "bot-3",
+          "slot": "A",
+          "name": "Bot 3",
+          "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%232b2141%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%238a5cff%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB3%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20"
+        },
+        {
+          "id": "e374080a-ebac-440c-b609-35fb8cb9a66b",
+          "participantId": "e374080a-ebac-440c-b609-35fb8cb9a66b",
+          "deviceId": "bot-5",
+          "slot": "B",
+          "name": "Bot 5",
+          "photoUrl": "data:image/svg+xml;charset=utf-8,%0A%20%20%20%20%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22256%22%20height%3D%22256%22%20viewBox%3D%220%200%20256%20256%22%3E%0A%20%20%20%20%20%20%3Cdefs%3E%0A%20%20%20%20%20%20%20%20%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%231f3b2e%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%20%20%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%235fd483%22%20%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%20%20%20%20%3C%2Fdefs%3E%0A%20%20%20%20%20%20%3Crect%20width%3D%22256%22%20height%3D%22256%22%20rx%3D%22128%22%20fill%3D%22url(%23g)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ccircle%20cx%3D%22128%22%20cy%3D%2296%22%20r%3D%2244%22%20fill%3D%22rgba(255%2C255%2C255%2C0.2)%22%20%2F%3E%0A%20%20%20%20%20%20%3Cpath%20d%3D%22M64%20214c9-36%2034-54%2064-54s55%2018%2064%2054%22%20fill%3D%22rgba(255%2C255%2C255%2C0.18)%22%20%2F%3E%0A%20%20%20%20%20%20%3Ctext%20x%3D%22128%22%20y%3D%22144%22%20text-anchor%3D%22middle%22%20font-family%3D%22Arial%2C%20Helvetica%2C%20sans-serif%22%20font-size%3D%2244%22%20font-weight%3D%22700%22%20fill%3D%22white%22%3EB5%3C%2Ftext%3E%0A%20%20%20%20%3C%2Fsvg%3E%0A%20%20"
+        }
+      ],
+      "wins": 0,
+      "losses": 1,
+      "buchholz": 0,
+      "matchesPlayedSwiss": 0,
+      "vacasWon": 0,
+      "gamesWon": 0,
+      "pointsWon": 5,
+      "byeCount": 0,
+      "opponents": [],
+      "status": "active",
+      "lastResult": "L"
+    }
+  ],
+  "matches": [
+    {
+      "id": "3fbb0902-3ae1-410e-bf5d-5c48b650f81c",
+      "stage": "semifinal",
+      "roundIndex": 1,
+      "table": 1,
+      "bracketLabel": "Semifinal 1",
+      "revealed": true,
+      "teamAId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+      "teamBId": "9dcfca9a-fc52-4137-a5ad-d3bd7f6e50f1",
+      "status": "completed",
+      "winnerId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+      "loserId": "9dcfca9a-fc52-4137-a5ad-d3bd7f6e50f1",
+      "bye": false,
+      "score": {
+        "teamA": {
+          "vacas": 1,
+          "games": 1,
+          "points": 30
+        },
+        "teamB": {
+          "vacas": 0,
+          "games": 0,
+          "points": 5
+        }
+      },
+      "mobileResultReports": [
+        {
+          "teamId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+          "deviceId": "device-8c22kgz0mpl",
+          "participantId": "3132df4a-251f-42c4-ab46-03e1ee1c022e",
+          "participantName": "Álvaro",
+          "score": {
+            "teamA": {
+              "vacas": 1,
+              "games": 1,
+              "points": 30
+            },
+            "teamB": {
+              "vacas": 0,
+              "games": 0,
+              "points": 5
+            }
+          },
+          "submittedAt": "2026-05-12T20:00:54.387Z"
+        }
+      ]
+    },
+    {
+      "id": "72ae7be4-f4f0-4526-82cc-eabad90a66fc",
+      "stage": "semifinal",
+      "roundIndex": 1,
+      "table": 2,
+      "bracketLabel": "Semifinal 2",
+      "revealed": true,
+      "teamAId": "0485efd0-a008-47a0-828a-6206011289f3",
+      "teamBId": "f179a0c5-0035-4bc2-a716-be77eddfd22a",
+      "status": "completed",
+      "winnerId": "0485efd0-a008-47a0-828a-6206011289f3",
+      "loserId": "f179a0c5-0035-4bc2-a716-be77eddfd22a",
+      "bye": false,
+      "score": {
+        "teamA": {
+          "vacas": 1,
+          "games": 1,
+          "points": 30
+        },
+        "teamB": {
+          "vacas": 0,
+          "games": 0,
+          "points": 5
+        }
+      }
+    },
+    {
+      "id": "cfdc39ba-ba2c-4d18-a30b-7e97cfaac06b",
+      "stage": "final",
+      "roundIndex": 1,
+      "table": 1,
+      "bracketLabel": "Final",
+      "revealed": true,
+      "teamAId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+      "teamBId": "0485efd0-a008-47a0-828a-6206011289f3",
+      "status": "completed",
+      "winnerId": "0485efd0-a008-47a0-828a-6206011289f3",
+      "loserId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+      "bye": false,
+      "score": {
+        "teamA": {
+          "vacas": 0,
+          "games": 0,
+          "points": 10
+        },
+        "teamB": {
+          "vacas": 1,
+          "games": 1,
+          "points": 30
+        }
+      },
+      "mobileResultReports": [
+        {
+          "teamId": "0485efd0-a008-47a0-828a-6206011289f3",
+          "deviceId": "device-igg69a4rxvc",
+          "participantId": "b925b6b5-234a-4a78-b369-50625414f580",
+          "participantName": "ana bohueles",
+          "score": {
+            "teamA": {
+              "vacas": 0,
+              "games": 0,
+              "points": 10
+            },
+            "teamB": {
+              "vacas": 1,
+              "games": 1,
+              "points": 30
+            }
+          },
+          "submittedAt": "2026-05-12T20:01:52.450Z"
+        },
+        {
+          "teamId": "8828aa11-b2b2-40ed-a53d-799ae9b57754",
+          "deviceId": "device-8c22kgz0mpl",
+          "participantId": "3132df4a-251f-42c4-ab46-03e1ee1c022e",
+          "participantName": "Álvaro",
+          "score": {
+            "teamA": {
+              "vacas": 0,
+              "games": 0,
+              "points": 10
+            },
+            "teamB": {
+              "vacas": 1,
+              "games": 1,
+              "points": 30
+            }
+          },
+          "submittedAt": "2026-05-12T20:02:15.800Z"
+        }
+      ]
+    }
+  ],
   "chatMessages": [],
-  "teamCreationMode": "pending",
+  "teamCreationMode": "manual",
   "championTeamId": null,
   "runnerUpTeamId": null,
-  "createdAt": "2026-05-03T17:36:48.806Z",
-  "updatedAt": "2026-05-03T17:37:21.129Z"
+  "createdAt": "2026-05-12T19:35:26.325Z",
+  "updatedAt": "2026-05-12T20:02:15.800Z"
 }

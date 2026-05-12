@@ -7,17 +7,41 @@ import { InfoHint } from "@/components/info-hint";
 import { TournamentWatermark } from "@/components/tournament-watermark";
 import type {
   Match,
+  MatchScore,
   Participant,
   Team,
   TournamentState,
 } from "@/lib/tournament";
-import { isPointsOnlyMatchFormat } from "@/lib/tournament";
+import {
+  canDeviceSubmitTeamResult,
+  getMatchMobileResultConflict,
+  isPointsOnlyMatchFormat,
+} from "@/lib/tournament";
 
 interface MobileJoinFormProps {
   initialState: TournamentState;
 }
 
+interface MobileResultDraft {
+  teamA: {
+    vacas: string;
+    games: string;
+    points: string;
+  };
+  teamB: {
+    vacas: string;
+    games: string;
+    points: string;
+  };
+}
+
+interface PendingMobileResultConfirmation {
+  matchId: string;
+  score: MatchScore;
+}
+
 const DEVICE_STORAGE_KEY = "torneo-mus-device-id";
+const DEVICE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 const CAMERA_SAFE_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -29,6 +53,54 @@ function createDeviceId(): string {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : `device-${Math.random().toString(36).slice(2)}`;
+}
+
+function readDeviceCookie(): string | null {
+  const cookie = document.cookie
+    .split("; ")
+    .find((entry) => entry.startsWith(`${DEVICE_STORAGE_KEY}=`));
+
+  if (!cookie) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(cookie.split("=").slice(1).join("=")).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDeviceCookie(deviceId: string): void {
+  document.cookie = `${DEVICE_STORAGE_KEY}=${encodeURIComponent(
+    deviceId,
+  )}; Max-Age=${DEVICE_COOKIE_MAX_AGE}; Path=/; SameSite=Lax`;
+}
+
+function readStoredDeviceId(): string | null {
+  try {
+    return window.localStorage.getItem(DEVICE_STORAGE_KEY)?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistDeviceId(deviceId: string): void {
+  try {
+    window.localStorage.setItem(DEVICE_STORAGE_KEY, deviceId);
+  } catch {
+    // La cookie mantiene identidad cuando localStorage no esté disponible.
+  }
+
+  writeDeviceCookie(deviceId);
+}
+
+function resolveDeviceId(): string {
+  const storedDeviceId = readStoredDeviceId();
+  const cookieDeviceId = readDeviceCookie();
+  const nextDeviceId = storedDeviceId || cookieDeviceId || createDeviceId();
+  persistDeviceId(nextDeviceId);
+  return nextDeviceId;
 }
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
@@ -128,6 +200,11 @@ function formatTime(value: string): string {
   }).format(parsed);
 }
 
+function toNumber(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function getParticipantTeam(state: TournamentState, participant: Participant | null): Team | null {
   if (!participant?.teamId) {
     return null;
@@ -215,27 +292,90 @@ function getPerspectiveResultLabel(match: Match, teamId: string): string {
   return "Cerrado";
 }
 
+function buildMobileResultDraft(match: Match, teamId: string | null): MobileResultDraft {
+  const ownReport = teamId
+    ? match.mobileResultReports?.find((report) => report.teamId === teamId)
+    : null;
+  const score = ownReport?.score ?? match.score;
+
+  return {
+    teamA: {
+      vacas: String(score?.teamA.vacas ?? 0),
+      games: String(score?.teamA.games ?? 0),
+      points: String(score?.teamA.points ?? 0),
+    },
+    teamB: {
+      vacas: String(score?.teamB.vacas ?? 0),
+      games: String(score?.teamB.games ?? 0),
+      points: String(score?.teamB.points ?? 0),
+    },
+  };
+}
+
+function mobileDraftToScore(draft: MobileResultDraft, pointsOnlyMode: boolean): MatchScore {
+  return {
+    teamA: {
+      vacas: pointsOnlyMode ? 0 : toNumber(draft.teamA.vacas),
+      games: pointsOnlyMode ? 0 : toNumber(draft.teamA.games),
+      points: toNumber(draft.teamA.points),
+    },
+    teamB: {
+      vacas: pointsOnlyMode ? 0 : toNumber(draft.teamB.vacas),
+      games: pointsOnlyMode ? 0 : toNumber(draft.teamB.games),
+      points: toNumber(draft.teamB.points),
+    },
+  };
+}
+
+function scoreSummary(score: MatchScore, pointsOnlyMode: boolean): string {
+  return pointsOnlyMode
+    ? `${score.teamA.points}-${score.teamB.points}`
+    : `${score.teamA.vacas}-${score.teamB.vacas} vacas · ${score.teamA.games}-${score.teamB.games} juegos · ${score.teamA.points}-${score.teamB.points} puntos`;
+}
+
 export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const [state, setState] = useState(initialState);
   const [deviceId, setDeviceId] = useState("");
+  const [deviceIdReady, setDeviceIdReady] = useState(false);
   const [name, setName] = useState("");
   const [teamNameInput, setTeamNameInput] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string>("");
   const [chatInput, setChatInput] = useState("");
+  const [mobileResultDrafts, setMobileResultDrafts] = useState<
+    Record<string, MobileResultDraft>
+  >({});
+  const [pendingMobileResultConfirmation, setPendingMobileResultConfirmation] =
+    useState<PendingMobileResultConfirmation | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isSavingTeamName, setIsSavingTeamName] = useState(false);
+  const [isSubmittingMobileResult, setIsSubmittingMobileResult] = useState(false);
   const previewObjectUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const existingId = window.localStorage.getItem(DEVICE_STORAGE_KEY);
-    const nextDeviceId = existingId || createDeviceId();
-    if (!existingId) {
-      window.localStorage.setItem(DEVICE_STORAGE_KEY, nextDeviceId);
-    }
+    let active = true;
+    const nextDeviceId = resolveDeviceId();
     setDeviceId(nextDeviceId);
+
+    void fetch("/api/tournament", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload: TournamentState | { error: string }) => {
+        if (active && !("error" in payload)) {
+          setState(payload);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) {
+          setDeviceIdReady(true);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -295,8 +435,8 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const isTeamCaptain = Boolean(
     team &&
       participant &&
-      team.players[0].participantId &&
-      team.players[0].participantId === participant.id,
+      deviceId &&
+      canDeviceSubmitTeamResult(team, deviceId),
   );
   const participantSlot =
     team && participant
@@ -314,6 +454,16 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     () => isPointsOnlyMatchFormat(state.config),
     [state.config],
   );
+  const pendingMobileResultMatch = pendingMobileResultConfirmation
+    ? state.matches.find((match) => match.id === pendingMobileResultConfirmation.matchId) ??
+      null
+    : null;
+  const pendingMobileResultTeamA = pendingMobileResultMatch?.teamAId
+    ? state.teams.find((entry) => entry.id === pendingMobileResultMatch.teamAId) ?? null
+    : null;
+  const pendingMobileResultTeamB = pendingMobileResultMatch?.teamBId
+    ? state.teams.find((entry) => entry.id === pendingMobileResultMatch.teamBId) ?? null
+    : null;
 
   useEffect(() => {
     if (!teamId) {
@@ -511,6 +661,91 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     }
   }
 
+  function handleMobileResultDraftChange(
+    match: Match,
+    side: "teamA" | "teamB",
+    field: "vacas" | "games" | "points",
+    value: string,
+  ): void {
+    const digits = value.replace(/[^\d]/g, "");
+    const nextValue =
+      pointsOnlyMode && field === "points" && digits
+        ? String(Math.min(Number(digits), state.config.targetPoints))
+        : digits;
+
+    setMobileResultDrafts((current) => {
+      const existing = current[match.id] ?? buildMobileResultDraft(match, team?.id ?? null);
+
+      return {
+        ...current,
+        [match.id]: {
+          ...existing,
+          [side]: {
+            ...existing[side],
+            [field]: nextValue,
+          },
+        },
+      };
+    });
+  }
+
+  function handleRequestMobileResultConfirmation(match: Match): void {
+    const draft = mobileResultDrafts[match.id] ?? buildMobileResultDraft(match, team?.id ?? null);
+    setPendingMobileResultConfirmation({
+      matchId: match.id,
+      score: mobileDraftToScore(draft, pointsOnlyMode),
+    });
+  }
+
+  async function handleConfirmMobileResult(): Promise<void> {
+    if (!deviceId || !pendingMobileResultConfirmation) {
+      return;
+    }
+
+    setIsSubmittingMobileResult(true);
+
+    try {
+      const response = await fetch("/api/tournament", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "submitMobileMatchResult",
+          payload: {
+            deviceId,
+            matchId: pendingMobileResultConfirmation.matchId,
+            score: pendingMobileResultConfirmation.score,
+          },
+        }),
+      });
+      const payload = (await response.json()) as TournamentState | { error: string };
+
+      if (!response.ok || "error" in payload) {
+        throw new Error(
+          "error" in payload ? payload.error : "No se ha podido publicar el resultado.",
+        );
+      }
+
+      const updatedMatch = payload.matches.find(
+        (entry) => entry.id === pendingMobileResultConfirmation.matchId,
+      );
+      setState(payload);
+      setPendingMobileResultConfirmation(null);
+      setFeedback(
+        updatedMatch?.status === "completed"
+          ? "Resultado confirmado por los dos equipos. Mesa cerrada."
+          : updatedMatch && getMatchMobileResultConflict(updatedMatch)
+            ? "Los resultados no coinciden. Revisad ambas propuestas o esperad resolución manual."
+            : "Resultado enviado. Esperando confirmación del otro equipo.",
+      );
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsSubmittingMobileResult(false);
+    }
+  }
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.055)_0%,transparent_34%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
@@ -537,7 +772,11 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
               {state.config.title}
             </p>
             <h1 className="mt-3 text-3xl font-semibold leading-tight">
-              {participant ? `Hola, ${participant.name}` : "Entra en el torneo"}
+              {!deviceIdReady
+                ? "Recuperando ficha"
+                : participant
+                  ? `Hola, ${participant.name}`
+                  : "Entra en el torneo"}
             </h1>
             {participantSlot ? (
               <p className="mt-2 font-mono text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
@@ -547,7 +786,16 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           </div>
 
           <div className="space-y-6 px-6 py-7">
-            {!participant ? (
+            {!deviceIdReady ? (
+              <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+                <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                  Identificando móvil
+                </p>
+                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                  Estamos recuperando la ficha guardada en este navegador.
+                </p>
+              </div>
+            ) : !participant ? (
               <>
                 <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
                   <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
@@ -659,7 +907,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                           Nombre pendiente
                         </p>
                         <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                          El nombre del equipo tiene que decidirlo tu compañero desde el móvil de la plaza A. En cuanto lo guarde, aquí dejarás de ver el nombre provisional largo.
+                          El nombre del equipo tiene que decidirlo la plaza A desde su móvil, o la plaza B si A no tiene móvil real. En cuanto lo guarde, aquí dejarás de ver el nombre provisional largo.
                         </p>
                       </section>
                     ) : null}
@@ -742,17 +990,50 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                         <div className="mt-5 space-y-3">
                           {sortedTeamMatches.map((match) => {
                             const opponent = getOpponent(match, team, state);
+                            const matchTeamA = match.teamAId
+                              ? state.teams.find((entry) => entry.id === match.teamAId) ?? null
+                              : null;
+                            const matchTeamB = match.teamBId
+                              ? state.teams.find((entry) => entry.id === match.teamBId) ?? null
+                              : null;
                             const hiddenCurrentSwissMatch =
                               match.stage === "swiss" &&
                               match.roundIndex === state.currentSwissRound &&
                               !match.revealed;
                             const perspectiveScore = getPerspectiveScore(match, team.id);
                             const resultLabel = getPerspectiveResultLabel(match, team.id);
+                            const mobileConflict = getMatchMobileResultConflict(match);
+                            const ownMobileReport = match.mobileResultReports?.find(
+                              (report) => report.teamId === team.id,
+                            );
+                            const canSubmitMobileResult = Boolean(
+                              isTeamCaptain &&
+                                matchTeamA &&
+                                matchTeamB &&
+                                !match.bye &&
+                                match.revealed &&
+                                match.status !== "completed" &&
+                                (!ownMobileReport || mobileConflict),
+                            );
+                            const mobileDraft =
+                              mobileResultDrafts[match.id] ??
+                              buildMobileResultDraft(match, team.id);
+                            const scoreFields = pointsOnlyMode
+                              ? ([["points", `Puntos · máx ${state.config.targetPoints}`]] as const)
+                              : ([
+                                  ["vacas", "Vacas"],
+                                  ["games", "Juegos"],
+                                  ["points", "Puntos"],
+                                ] as const);
 
                             return (
                               <div
                                 key={match.id}
-                                className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-4"
+                                className={`rounded-[8px] border px-4 py-4 ${
+                                  mobileConflict
+                                    ? "border-rose-400/60 bg-rose-500/10"
+                                    : "border-[var(--stroke)] bg-[var(--surface-strong)]"
+                                }`}
                               >
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                   <p className="text-sm font-semibold text-[var(--foreground)]">
@@ -760,8 +1041,14 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                                       ? "Ronda actual · pendiente de sorteo"
                                       : getMatchHeading(match)}
                                   </p>
-                                  <span className="rounded-full border border-[var(--stroke)] bg-[rgba(2,4,3,0.54)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
-                                    {resultLabel}
+                                  <span
+                                    className={`rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] ${
+                                      mobileConflict
+                                        ? "border-rose-300/40 bg-rose-500/16 text-rose-100"
+                                        : "border-[var(--stroke)] bg-[rgba(2,4,3,0.54)] text-[var(--accent)]"
+                                    }`}
+                                  >
+                                    {mobileConflict ? "Revisar resultado" : resultLabel}
                                   </span>
                                 </div>
 
@@ -813,6 +1100,109 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                                       </div>
                                     </div>
                                   )
+                                ) : null}
+
+                                {match.mobileResultReports?.length ? (
+                                  <div className="mt-3 grid gap-2">
+                                    {match.mobileResultReports.map((report) => {
+                                      const reportTeam = state.teams.find(
+                                        (entry) => entry.id === report.teamId,
+                                      );
+
+                                      return (
+                                        <div
+                                          key={`${match.id}-${report.teamId}-mobile-report`}
+                                          className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.44)] px-3 py-2"
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <p className="min-w-0 truncate text-xs font-semibold text-[var(--foreground)]">
+                                              {reportTeam?.name ?? "Equipo"}
+                                            </p>
+                                            <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                                              {formatTime(report.submittedAt)}
+                                            </span>
+                                          </div>
+                                          <p className="mt-1 text-xs text-[var(--muted)]">
+                                            {report.participantName}:{" "}
+                                            <span className="font-semibold text-[var(--foreground)]">
+                                              {scoreSummary(report.score, pointsOnlyMode)}
+                                            </span>
+                                          </p>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+
+                                {canSubmitMobileResult && matchTeamA && matchTeamB ? (
+                                  <form
+                                    className="mt-4 rounded-[8px] border border-[var(--accent-border)] bg-[rgba(124,255,79,0.08)] p-3"
+                                    onSubmit={(event) => {
+                                      event.preventDefault();
+                                      handleRequestMobileResultConfirmation(match);
+                                    }}
+                                  >
+                                    <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
+                                      Publicar resultado
+                                    </p>
+                                    <div className="mt-3 grid gap-3">
+                                      {([
+                                        ["teamA", matchTeamA],
+                                        ["teamB", matchTeamB],
+                                      ] as const).map(([side, sideTeam]) => (
+                                        <div
+                                          key={`${match.id}-${side}-mobile-score`}
+                                          className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.44)] p-3"
+                                        >
+                                          <p className="text-sm font-semibold text-[var(--foreground)]">
+                                            {sideTeam.name}
+                                          </p>
+                                          <div
+                                            className={`mt-2 grid gap-2 ${
+                                              pointsOnlyMode ? "grid-cols-1" : "grid-cols-3"
+                                            }`}
+                                          >
+                                            {scoreFields.map(([field, label]) => (
+                                              <label key={field} className="block">
+                                                <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                                                  {label}
+                                                </span>
+                                                <input
+                                                  type="text"
+                                                  inputMode="numeric"
+                                                  pattern="[0-9]*"
+                                                  value={mobileDraft[side][field]}
+                                                  onChange={(event) =>
+                                                    handleMobileResultDraftChange(
+                                                      match,
+                                                      side,
+                                                      field,
+                                                      event.target.value,
+                                                    )
+                                                  }
+                                                  maxLength={pointsOnlyMode ? 2 : undefined}
+                                                  className="input-shell mt-1 !bg-[var(--surface-inset)] !py-2 text-center text-base font-semibold !text-[var(--foreground)]"
+                                                />
+                                              </label>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <button
+                                      type="submit"
+                                      disabled={isSubmittingMobileResult}
+                                      className="button-primary mt-3 w-full"
+                                    >
+                                      {mobileConflict ? "Reenviar resultado" : "Enviar resultado"}
+                                    </button>
+                                  </form>
+                                ) : ownMobileReport &&
+                                  !mobileConflict &&
+                                  match.status !== "completed" ? (
+                                  <div className="mt-4 rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-2 text-sm leading-6 text-[var(--foreground)]">
+                                    Resultado enviado. Esperando confirmación del otro equipo.
+                                  </div>
                                 ) : null}
                               </div>
                             );
@@ -910,6 +1300,64 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           </div>
         </section>
       </div>
+      {pendingMobileResultConfirmation &&
+      pendingMobileResultMatch &&
+      pendingMobileResultTeamA &&
+      pendingMobileResultTeamB ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5 shadow-[0_30px_120px_rgba(0,0,0,0.44)]">
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+              Confirmar resultado
+            </p>
+            <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+              Revisa antes de publicar
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+              Esta es la segunda confirmación. Si el otro equipo publica el mismo marcador, la mesa se cerrará automáticamente.
+            </p>
+            <div className="mt-4 grid gap-2">
+              <div className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.44)] px-3 py-2">
+                <p className="text-sm font-semibold text-[var(--foreground)]">
+                  {pendingMobileResultTeamA.name}
+                </p>
+                <p className="mt-1 font-mono text-xs uppercase tracking-[0.14em] text-[var(--accent)]">
+                  {pointsOnlyMode
+                    ? `${pendingMobileResultConfirmation.score.teamA.points} puntos`
+                    : `${pendingMobileResultConfirmation.score.teamA.vacas} vacas · ${pendingMobileResultConfirmation.score.teamA.games} juegos · ${pendingMobileResultConfirmation.score.teamA.points} puntos`}
+                </p>
+              </div>
+              <div className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.44)] px-3 py-2">
+                <p className="text-sm font-semibold text-[var(--foreground)]">
+                  {pendingMobileResultTeamB.name}
+                </p>
+                <p className="mt-1 font-mono text-xs uppercase tracking-[0.14em] text-[var(--accent)]">
+                  {pointsOnlyMode
+                    ? `${pendingMobileResultConfirmation.score.teamB.points} puntos`
+                    : `${pendingMobileResultConfirmation.score.teamB.vacas} vacas · ${pendingMobileResultConfirmation.score.teamB.games} juegos · ${pendingMobileResultConfirmation.score.teamB.points} puntos`}
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setPendingMobileResultConfirmation(null)}
+                disabled={isSubmittingMobileResult}
+                className="button-secondary"
+              >
+                Volver
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmMobileResult()}
+                disabled={isSubmittingMobileResult}
+                className="button-primary"
+              >
+                {isSubmittingMobileResult ? "Publicando" : "Confirmar y publicar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

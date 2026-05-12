@@ -85,6 +85,15 @@ export interface MatchScore {
   teamB: MatchScoreSide;
 }
 
+export interface MobileResultReport {
+  teamId: string;
+  deviceId: string;
+  participantId: string | null;
+  participantName: string;
+  score: MatchScore;
+  submittedAt: string;
+}
+
 export interface Match {
   id: string;
   stage: MatchStage;
@@ -99,6 +108,7 @@ export interface Match {
   loserId: string | null;
   bye: boolean;
   score: MatchScore | null;
+  mobileResultReports?: MobileResultReport[];
   marker?: "autoWin" | "qualification" | "elimination";
   topRank?: 1 | 2 | 3 | 4;
 }
@@ -145,6 +155,12 @@ export interface TeamUpdateInput {
 }
 
 export interface MatchResultInput {
+  matchId: string;
+  score: MatchScore;
+}
+
+export interface MobileMatchResultInput {
+  deviceId: string;
   matchId: string;
   score: MatchScore;
 }
@@ -477,6 +493,18 @@ function topCutPointsComparator(a: Team, b: Team): number {
   );
 }
 
+function provisionalTopCutComparator(a: Team, b: Team): number {
+  return b.wins - a.wins || b.pointsWon - a.pointsWon || a.seed - b.seed;
+}
+
+function hasSameProvisionalTopCutScore(a: Team, b: Team): boolean {
+  return a.wins === b.wins && a.pointsWon === b.pointsWon;
+}
+
+function pluralize(value: number, singular: string, plural: string): string {
+  return value === 1 ? singular : plural;
+}
+
 function roundRecordComparator(a: string, b: string): number {
   const [aWins, aLosses] = a.split("-").map(Number);
   const [bWins, bLosses] = b.split("-").map(Number);
@@ -498,6 +526,70 @@ function scoreComparator(score: MatchScore): number {
     score.teamA.games - score.teamB.games ||
     score.teamA.points - score.teamB.points
   );
+}
+
+export function matchScoresAreEqual(a: MatchScore, b: MatchScore): boolean {
+  return (
+    a.teamA.vacas === b.teamA.vacas &&
+    a.teamA.games === b.teamA.games &&
+    a.teamA.points === b.teamA.points &&
+    a.teamB.vacas === b.teamB.vacas &&
+    a.teamB.games === b.teamB.games &&
+    a.teamB.points === b.teamB.points
+  );
+}
+
+function isRealMobilePlayer(player: PlayerProfile): boolean {
+  return Boolean(
+    player.participantId &&
+      player.deviceId &&
+      !player.deviceId.trim().toLowerCase().startsWith("bot-"),
+  );
+}
+
+export function getAuthorizedMobileReporter(team: Team): PlayerProfile | null {
+  const playerA = team.players[0];
+
+  if (isRealMobilePlayer(playerA)) {
+    return playerA;
+  }
+
+  const playerB = team.players[1];
+
+  return isRealMobilePlayer(playerB) ? playerB : null;
+}
+
+export function canDeviceSubmitTeamResult(team: Team, deviceId: string): boolean {
+  const reporter = getAuthorizedMobileReporter(team);
+  return Boolean(reporter?.deviceId && reporter.deviceId === deviceId.trim());
+}
+
+export function getMatchMobileResultConflict(match: Match): boolean {
+  if (match.status === "completed") {
+    return false;
+  }
+
+  const { teamAReport, teamBReport } = getMatchMobileResultReportsBySide(match);
+
+  return Boolean(
+    teamAReport &&
+      teamBReport &&
+      !matchScoresAreEqual(teamAReport.score, teamBReport.score),
+  );
+}
+
+function getMatchMobileResultReportsBySide(match: Match): {
+  teamAReport: MobileResultReport | null;
+  teamBReport: MobileResultReport | null;
+} {
+  const reports = match.mobileResultReports ?? [];
+
+  return {
+    teamAReport:
+      reports.find((report) => report.teamId === match.teamAId) ?? null,
+    teamBReport:
+      reports.find((report) => report.teamId === match.teamBId) ?? null,
+  };
 }
 
 function buildMatch(
@@ -775,6 +867,15 @@ function cloneState(state: TournamentState): TournamentState {
             teamB: { ...match.score.teamB },
           }
         : null,
+      mobileResultReports: Array.isArray(match.mobileResultReports)
+        ? match.mobileResultReports.map((report) => ({
+            ...report,
+            score: {
+              teamA: { ...report.score.teamA },
+              teamB: { ...report.score.teamB },
+            },
+          }))
+        : undefined,
     })),
     chatMessages: state.chatMessages.map((message) => ({ ...message })),
   };
@@ -1079,14 +1180,16 @@ export function setTeamCustomName(
     throw new Error("No se ha encontrado el equipo indicado.");
   }
 
-  const captainDeviceId = team.players[0].deviceId;
+  const captainDeviceId = getAuthorizedMobileReporter(team)?.deviceId;
 
   if (!captainDeviceId) {
     throw new Error("La pareja aún no está completa.");
   }
 
   if (captainDeviceId !== input.deviceId.trim()) {
-    throw new Error("El nombre del equipo solo puede decidirlo la plaza A desde su móvil.");
+    throw new Error(
+      "El nombre del equipo solo puede decidirlo la plaza A desde su móvil, o la plaza B si A no tiene móvil real.",
+    );
   }
 
   const name = input.name.trim();
@@ -1278,12 +1381,12 @@ export function renameParticipantDuringSetup(
   return refreshTournamentState(cloned);
 }
 
-export function deleteBotParticipantDuringSetup(
+export function deleteParticipantDuringSetup(
   state: TournamentState,
   input: ParticipantDeleteInput,
 ): TournamentState {
   if (state.stage !== "setup") {
-    throw new Error("Los bots solo se pueden eliminar durante la preparación.");
+    throw new Error("Las personas solo se pueden eliminar durante la preparación.");
   }
 
   const cloned = cloneState(state);
@@ -1294,10 +1397,6 @@ export function deleteBotParticipantDuringSetup(
 
   if (!participant) {
     throw new Error("No se ha encontrado la persona indicada.");
-  }
-
-  if (!participant.deviceId.startsWith("bot-")) {
-    throw new Error("Solo se pueden eliminar bots de prueba.");
   }
 
   cloned.participants.splice(participantIndex, 1);
@@ -1321,6 +1420,13 @@ export function deleteBotParticipantDuringSetup(
   }
 
   return refreshTournamentState(cloned);
+}
+
+export function deleteBotParticipantDuringSetup(
+  state: TournamentState,
+  input: ParticipantDeleteInput,
+): TournamentState {
+  return deleteParticipantDuringSetup(state, input);
 }
 
 export function createRandomTeams(state: TournamentState): TournamentState {
@@ -1989,6 +2095,104 @@ export function recordMatchResult(
   return refreshTournamentState(cloned);
 }
 
+export function submitMobileMatchResult(
+  state: TournamentState,
+  input: MobileMatchResultInput,
+): TournamentState {
+  const cloned = cloneState(state);
+
+  if (
+    cloned.stage !== "swiss" &&
+    cloned.stage !== "semifinals" &&
+    cloned.stage !== "final"
+  ) {
+    throw new Error("No hay una mesa activa donde publicar resultados.");
+  }
+
+  const match = cloned.matches.find((entry) => entry.id === input.matchId);
+
+  if (!match || !match.teamAId || !match.teamBId) {
+    throw new Error("No se ha encontrado el enfrentamiento indicado.");
+  }
+
+  if (match.status === "completed") {
+    throw new Error("Esta mesa ya está cerrada y no admite cambios desde móvil.");
+  }
+
+  if (match.bye) {
+    throw new Error("Los descansos automáticos no necesitan resultado.");
+  }
+
+  if (match.stage === "swiss" && !match.revealed) {
+    throw new Error("Esta mesa todavía no se ha sorteado.");
+  }
+
+  const deviceId = input.deviceId.trim();
+  const teamsById = new Map(cloned.teams.map((team) => [team.id, team]));
+  const teamA = teamsById.get(match.teamAId);
+  const teamB = teamsById.get(match.teamBId);
+  const reportingTeam = [teamA, teamB].find(
+    (team): team is Team => Boolean(team && canDeviceSubmitTeamResult(team, deviceId)),
+  );
+
+  if (!reportingTeam) {
+    throw new Error(
+      "Solo puede publicar el resultado la plaza A de cada pareja, o la plaza B si A no tiene móvil real.",
+    );
+  }
+
+  const reporter = getAuthorizedMobileReporter(reportingTeam);
+  const normalizedScore = ensureMatchScore(cloned, input.score);
+  const submittedAt = nowIso();
+  const previousReports = (match.mobileResultReports ?? []).filter(
+    (report) => report.teamId === match.teamAId || report.teamId === match.teamBId,
+  );
+  const previousOwnReport = previousReports.find(
+    (report) => report.teamId === reportingTeam.id,
+  );
+  const previousConflict = getMatchMobileResultConflict({
+    ...match,
+    mobileResultReports: previousReports,
+  });
+
+  if (previousOwnReport && !previousConflict) {
+    throw new Error(
+      "Ya has enviado el resultado. Solo puedes modificarlo si no coincide con el del otro equipo.",
+    );
+  }
+
+  const nextReport: MobileResultReport = {
+    teamId: reportingTeam.id,
+    deviceId,
+    participantId: reporter?.participantId ?? null,
+    participantName: reporter?.name.trim() || reportingTeam.name,
+    score: normalizedScore,
+    submittedAt,
+  };
+  match.mobileResultReports = [
+    ...previousReports.filter((report) => report.teamId !== reportingTeam.id),
+    nextReport,
+  ];
+
+  const { teamAReport, teamBReport } = getMatchMobileResultReportsBySide(match);
+
+  if (teamAReport && teamBReport && matchScoresAreEqual(teamAReport.score, teamBReport.score)) {
+    const comparator = scoreComparator(teamAReport.score);
+    const teamAWins = comparator > 0;
+
+    match.status = "completed";
+    match.revealed = true;
+    match.score = {
+      teamA: { ...teamAReport.score.teamA },
+      teamB: { ...teamAReport.score.teamB },
+    };
+    match.winnerId = teamAWins ? match.teamAId : match.teamBId;
+    match.loserId = teamAWins ? match.teamBId : match.teamAId;
+  }
+
+  return refreshTournamentState(cloned);
+}
+
 export function revealSwissGroup(
   state: TournamentState,
   bracketLabel: string,
@@ -2036,6 +2240,93 @@ function createSemifinals(state: TournamentState): TournamentState {
     ...refreshed,
     stage: "semifinals",
     matches: [...refreshed.matches, ...matches],
+  });
+}
+
+function getProvisionalTopCutTeams(state: TournamentState): Team[] {
+  const candidates = getRankedTeams(state)
+    .filter((team) => team.status !== "eliminated")
+    .sort(provisionalTopCutComparator);
+
+  if (candidates.length < TOP_CUT) {
+    throw new Error("No hay al menos 4 parejas disponibles para pasar a semifinales.");
+  }
+
+  for (let index = 0; index < TOP_CUT; index += 1) {
+    const current = candidates[index];
+    const next = candidates[index + 1];
+
+    if (!current || !next || !hasSameProvisionalTopCutScore(current, next)) {
+      continue;
+    }
+
+    const tiedTeams = candidates.filter((team) =>
+      hasSameProvisionalTopCutScore(team, current),
+    );
+    const tiedNames = tiedTeams.map((team) => team.name).join(", ");
+    const winsText = pluralize(current.wins, "victoria", "victorias");
+    const reason =
+      index === TOP_CUT - 1
+        ? "no se puede distinguir qué pareja ocupa el Top 4"
+        : `no se puede ordenar el Top ${index + 1} y el Top ${index + 2}`;
+
+    throw new Error(
+      `No se puede pasar a semifinales todavía: ${reason}. ${tiedNames} están empatados con ${current.wins} ${winsText} y ${current.pointsWon} puntos totales. Jugad otra ronda o cerrad más resultados para romper el empate.`,
+    );
+  }
+
+  return candidates.slice(0, TOP_CUT);
+}
+
+export function forceSemifinalsFromCurrentStandings(state: TournamentState): TournamentState {
+  const refreshed = refreshTournamentState(state);
+
+  if (refreshed.stage !== "swiss") {
+    throw new Error("Solo se puede saltar a semifinales desde la fase suiza.");
+  }
+
+  if (refreshed.config.format !== "swiss_top4") {
+    throw new Error("Este salto solo está disponible en formato Suizo + Top 4.");
+  }
+
+  const topFour = getProvisionalTopCutTeams(refreshed);
+  const swissMatchesWithoutPreviousQualifications = refreshed.matches.filter(
+    (match) => !(match.stage === "swiss" && match.marker === "qualification"),
+  );
+  const qualificationTableStart =
+    Math.max(
+      0,
+      ...swissMatchesWithoutPreviousQualifications
+        .filter(
+          (match) =>
+            match.stage === "swiss" && match.roundIndex === refreshed.currentSwissRound,
+        )
+        .map((match) => match.table),
+    ) + 1;
+  const qualificationMarkers = topFour.map((team, index) =>
+    buildQualificationMarker(
+      refreshed.currentSwissRound || 1,
+      qualificationTableStart + index,
+      team.id,
+      "Corte directo",
+      (index + 1) as 1 | 2 | 3 | 4,
+    ),
+  );
+  const semifinalMatches = [
+    buildMatch("semifinal", 1, 1, topFour[0].id, topFour[3].id, "Semifinal 1"),
+    buildMatch("semifinal", 1, 2, topFour[1].id, topFour[2].id, "Semifinal 2"),
+  ];
+
+  return refreshTournamentState({
+    ...refreshed,
+    stage: "semifinals",
+    championTeamId: null,
+    runnerUpTeamId: null,
+    matches: [
+      ...swissMatchesWithoutPreviousQualifications,
+      ...qualificationMarkers,
+      ...semifinalMatches,
+    ],
   });
 }
 

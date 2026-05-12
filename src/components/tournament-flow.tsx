@@ -28,6 +28,7 @@ import type {
 } from "@/lib/tournament";
 import {
   TOP_CUT,
+  getMatchMobileResultConflict,
   getTournamentStructure,
   isPointsOnlyMatchFormat,
   isTeamComplete,
@@ -206,6 +207,12 @@ function buildResultDraft(match: Match): ResultDraft {
       points: String(match.score?.teamB.points ?? 0),
     },
   };
+}
+
+function formatScoreSummary(score: MatchScore, pointsOnlyMode: boolean): string {
+  return pointsOnlyMode
+    ? `${score.teamA.points}-${score.teamB.points}`
+    : `${score.teamA.vacas}-${score.teamB.vacas} vacas · ${score.teamA.games}-${score.teamB.games} juegos · ${score.teamA.points}-${score.teamB.points} puntos`;
 }
 
 function toNumber(value: string): number {
@@ -1100,7 +1107,6 @@ function RegistrationQrCard({
     url: "",
     dataUrl: "",
   });
-  const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const currentQrDataUrl = qrState.url === registrationUrl ? qrState.dataUrl : "";
 
@@ -1136,20 +1142,10 @@ function RegistrationQrCard({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [expanded]);
 
-  async function handleCopy(): Promise<void> {
-    if (!registrationUrl) {
-      return;
-    }
-
-    await navigator.clipboard.writeText(registrationUrl);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
-  }
-
   return (
     <>
     <div className="registration-qr-card rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-3">
-      <div className="flex items-start justify-between gap-4">
+      <div>
         <div>
           <div className="flex items-center gap-2">
             <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
@@ -1161,12 +1157,9 @@ function RegistrationQrCard({
             Un solo QR para todos los jugadores
           </h3>
         </div>
-        <button type="button" onClick={() => void handleCopy()} className="button-secondary">
-          {copied ? "Copiado" : "Copiar enlace"}
-        </button>
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-[150px_1fr]">
+      <div className="mt-3 max-w-[145px]">
         <button
           type="button"
           onClick={() => currentQrDataUrl && setExpanded(true)}
@@ -1185,17 +1178,6 @@ function RegistrationQrCard({
             </div>
           )}
         </button>
-
-        <div className="space-y-4">
-          <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
-              Enlace activo
-            </p>
-            <p className="mt-2 break-all font-mono text-xs leading-5 text-[var(--muted)]">
-              {registrationUrl || "Guarda primero la URL activa del torneo."}
-            </p>
-          </div>
-        </div>
       </div>
     </div>
     {expanded && currentQrDataUrl ? (
@@ -1226,6 +1208,8 @@ function ParticipantCard({
   onDragEnd,
   canEdit = false,
   onEdit,
+  canDelete = false,
+  onDelete,
 }: {
   participant: Participant;
   draggable?: boolean;
@@ -1234,6 +1218,8 @@ function ParticipantCard({
   onDragEnd?: () => void;
   canEdit?: boolean;
   onEdit?: (participant: Participant) => void;
+  canDelete?: boolean;
+  onDelete?: (participant: Participant) => void;
 }) {
   const isBot = participant.deviceId.startsWith("bot-");
 
@@ -1255,20 +1241,20 @@ function ParticipantCard({
         onDragStart?.(participant.id);
       }}
       onDragEnd={() => onDragEnd?.()}
-      className={`rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-3 transition ${
+      className={`rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-2.5 transition ${
         draggable ? "cursor-grab active:cursor-grabbing" : ""
       } ${canEdit ? "cursor-pointer hover:border-[var(--accent-border)]" : ""} ${dimmed ? "opacity-45" : ""}`}
     >
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="h-12 w-12 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
+        <div className="min-w-0 flex items-center gap-3">
+          <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)]">
             <img
               src={participant.photoUrl}
               alt={participant.name}
               className="h-full w-full object-cover"
             />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-[var(--foreground)]">{participant.name}</p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <p className="text-[10px] text-[var(--muted-soft)]">
@@ -1282,6 +1268,19 @@ function ParticipantCard({
             </div>
           </div>
         </div>
+        {canDelete ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete?.(participant);
+            }}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-red-500/30 bg-red-500/10 font-mono text-sm leading-none text-red-100 transition hover:border-red-400/70 hover:bg-red-500/20"
+            aria-label={`Eliminar a ${participant.name}`}
+          >
+            ×
+          </button>
+        ) : null}
       </div>
 
     </div>
@@ -1339,7 +1338,7 @@ function RegistrationStageScreen({
   onBack,
   onAddBotParticipant,
   onRenameParticipant,
-  onDeleteBotParticipant,
+  onDeleteParticipant,
   renamingParticipantId,
   deletingParticipantId,
   onCreateRandomTeams,
@@ -1355,7 +1354,7 @@ function RegistrationStageScreen({
   onBack: () => void;
   onAddBotParticipant: () => void;
   onRenameParticipant: (participantId: string, name: string) => void;
-  onDeleteBotParticipant: (participantId: string) => void;
+  onDeleteParticipant: (participant: Participant) => void;
   renamingParticipantId: string | null;
   deletingParticipantId: string | null;
   onCreateRandomTeams: () => void;
@@ -1558,41 +1557,38 @@ function RegistrationStageScreen({
                     <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                       Estado del registro
                     </p>
-                    <h3 className="mt-1 text-xl font-semibold text-[var(--foreground)]">
+                    <h3 className="mt-1 text-base font-semibold leading-tight text-[var(--foreground)]">
                       {registrationComplete
                         ? "Ya están todos los jugadores"
                         : `Faltan ${remainingCount} personas por entrar`}
                     </h3>
                   </div>
-                  <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
-                    {participantCountIsEven ? "conteo par" : "conteo impar"}
-                  </span>
                 </div>
 
-                <div className="mt-3 grid gap-2 md:grid-cols-3">
-                  <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-2.5">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                <div className="mt-2 grid gap-1.5 md:grid-cols-3">
+                  <div className="flex items-center justify-between gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2 py-1.5">
+                    <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-[var(--accent)]">
                       Registrados
                     </p>
-                    <p className="mt-2 text-2xl font-semibold text-[var(--foreground)]">{registeredCount}</p>
+                    <p className="font-mono text-base font-semibold leading-none text-[var(--foreground)]">{registeredCount}</p>
                   </div>
-                  <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-2.5">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                  <div className="flex items-center justify-between gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2 py-1.5">
+                    <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-[var(--accent)]">
                       Objetivo
                     </p>
-                    <p className="mt-2 text-2xl font-semibold text-[var(--foreground)]">{expectedParticipants}</p>
+                    <p className="font-mono text-base font-semibold leading-none text-[var(--foreground)]">{expectedParticipants}</p>
                   </div>
-                  <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-2.5">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                  <div className="flex items-center justify-between gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2 py-1.5">
+                    <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-[var(--accent)]">
                       Parejas listas
                     </p>
-                    <p className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+                    <p className="font-mono text-base font-semibold leading-none text-[var(--foreground)]">
                       {state.teams.filter((team) => isTeamComplete(team) && team.confirmed).length}
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap gap-1.5">
                   <button
                     type="button"
                     onClick={onAddBotParticipant}
@@ -1619,7 +1615,7 @@ function RegistrationStageScreen({
                   </button>
                 </div>
 
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-2 flex flex-wrap gap-1.5">
                   <StageBadge label={formatTournamentFormatLabel(state.config.format)} />
                   <StageBadge
                     label={
@@ -1632,11 +1628,11 @@ function RegistrationStageScreen({
                   />
                 </div>
 
-                {!canCreateTeams ? (
-                  <div className="mt-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
-                    {registeredCount === 0
-                      ? "Todavía no se ha registrado nadie."
-                      : !participantCountIsEven
+                {!canCreateTeams &&
+                registeredCount > 0 &&
+                (!participantCountIsEven || registeredCount >= expectedParticipants) ? (
+                  <div className="mt-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--muted)]">
+                    {!participantCountIsEven
                         ? "No puedes crear parejas hasta tener un número par de personas."
                         : registeredCount < expectedParticipants
                           ? "Aún no han entrado todas las personas previstas por la configuración del torneo."
@@ -1671,6 +1667,8 @@ function RegistrationStageScreen({
                         dimmed={assignedParticipantIds.has(participant.id)}
                         canEdit={participant.deviceId.startsWith("bot-")}
                         onEdit={openBotEditor}
+                        canDelete
+                        onDelete={onDeleteParticipant}
                       />
                     ))}
                     {state.participants.length === 0 ? (
@@ -1868,7 +1866,7 @@ function RegistrationStageScreen({
               <button
                 type="button"
                 onClick={() => {
-                  onDeleteBotParticipant(activeEditingBot.id);
+                  onDeleteParticipant(activeEditingBot);
                   setEditingBotId(null);
                 }}
                 disabled={deletingParticipantId === activeEditingBot.id}
@@ -2027,6 +2025,7 @@ function MatchTile({
 }) {
   const teamA = match.teamAId ? teamsById.get(match.teamAId) : null;
   const teamB = match.teamBId ? teamsById.get(match.teamBId) : null;
+  const mobileConflict = getMatchMobileResultConflict(match);
   const compact = density !== "regular";
   const micro = density === "micro" || density === "nano";
   const nano = density === "nano";
@@ -2110,14 +2109,20 @@ function MatchTile({
     <button
       type="button"
       onClick={() => onOpen(match.id)}
-      className={`match-tile w-full rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] ${tilePadding} text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]`}
+      className={`match-tile w-full rounded-[8px] border ${
+        mobileConflict
+          ? "border-rose-400/70 bg-rose-500/12"
+          : "border-[var(--stroke)] bg-[var(--surface-strong)]"
+      } ${tilePadding} text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]`}
     >
       <div className="flex items-center justify-between gap-2">
         <p className={`font-mono uppercase text-[var(--accent)] ${metaText}`}>
           mesa {match.table}
         </p>
         <p className={`font-mono uppercase text-[var(--muted-soft)] ${metaText}`}>
-          {match.status === "completed"
+          {mobileConflict
+            ? "revisar"
+            : match.status === "completed"
             ? `${pointsOnlyMode ? match.score?.teamA.points ?? 0 : match.score?.teamA.vacas ?? 0}-${pointsOnlyMode ? match.score?.teamB.points ?? 0 : match.score?.teamB.vacas ?? 0}`
             : "pend."}
         </p>
@@ -2281,6 +2286,84 @@ function MatchResultTeamCard({
   );
 }
 
+function MobileResultReportsPanel({
+  match,
+  teamsById,
+  pointsOnlyMode,
+}: {
+  match: Match;
+  teamsById: Map<string, Team>;
+  pointsOnlyMode: boolean;
+}) {
+  const reports = match.mobileResultReports ?? [];
+  const mobileConflict = getMatchMobileResultConflict(match);
+
+  if (reports.length === 0) {
+    return null;
+  }
+
+  return (
+    <section
+      className={`mt-5 rounded-[8px] border p-4 ${
+        mobileConflict
+          ? "border-rose-400/60 bg-rose-500/10"
+          : "border-[var(--stroke)] bg-[rgba(2,4,3,0.34)]"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p
+            className={`font-mono text-[10px] uppercase tracking-[0.2em] ${
+              mobileConflict ? "text-rose-100" : "text-[var(--accent)]"
+            }`}
+          >
+            Resultados desde móvil
+          </p>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            {mobileConflict
+              ? "Las dos propuestas no coinciden. Revisa y cierra manualmente si hace falta."
+              : reports.length === 1
+                ? "Hay una propuesta enviada. Falta la confirmación del otro equipo."
+                : "Las propuestas coinciden o la mesa ya está cerrada."}
+          </p>
+        </div>
+        {mobileConflict ? (
+          <span className="rounded-full border border-rose-300/40 bg-rose-500/16 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-rose-100">
+            Revisar resultado
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        {reports.map((report) => {
+          const reportTeam = teamsById.get(report.teamId);
+
+          return (
+            <article
+              key={`${match.id}-${report.teamId}-admin-mobile-report`}
+              className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-3 py-2"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-sm font-semibold text-[var(--foreground)]">
+                  {reportTeam?.name ?? "Equipo"}
+                </p>
+                <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                  {formatSyncTime(report.submittedAt)}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                {report.participantName}:{" "}
+                <span className="font-semibold text-[var(--foreground)]">
+                  {formatScoreSummary(report.score, pointsOnlyMode)}
+                </span>
+              </p>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function SwissStageScreen({
   state,
   resultDrafts,
@@ -2291,6 +2374,7 @@ function SwissStageScreen({
   onCloseMatch,
   activeMatchId,
   onAdvance,
+  onForceSemifinals,
   onSync,
   onBack,
   isPending,
@@ -2311,6 +2395,7 @@ function SwissStageScreen({
   onCloseMatch: () => void;
   activeMatchId: string | null;
   onAdvance: () => void;
+  onForceSemifinals: () => void;
   onSync: () => void;
   onBack: () => void;
   isPending: boolean;
@@ -2983,6 +3068,16 @@ function SwissStageScreen({
             <button type="button" onClick={onSync} disabled={isSyncing} className="button-secondary">
               {isSyncing ? "Sincronizando" : "Sincronizar"}
             </button>
+            {structure.topCut > 0 ? (
+              <button
+                type="button"
+                onClick={onForceSemifinals}
+                disabled={isPending}
+                className="button-secondary"
+              >
+                Semifinales ahora
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={onAdvance}
@@ -3044,6 +3139,12 @@ function SwissStageScreen({
                   onResultDraftChange={onResultDraftChange}
                 />
               </div>
+
+              <MobileResultReportsPanel
+                match={activeMatch}
+                teamsById={teamsById}
+                pointsOnlyMode={pointsOnlyMode}
+              />
 
               <div className="mt-6 flex justify-end">
                 <button
@@ -3281,6 +3382,12 @@ function PlayoffStageScreen({
                   onResultDraftChange={onResultDraftChange}
                 />
               </div>
+
+              <MobileResultReportsPanel
+                match={activeMatch}
+                teamsById={teamsById}
+                pointsOnlyMode={pointsOnlyMode}
+              />
 
               <div className="mt-6 flex justify-end">
                 <button
@@ -3636,16 +3743,24 @@ export function TournamentFlow({
     );
   }
 
-  function handleDeleteBotParticipant(participantId: string): void {
-    setDeletingParticipantId(participantId);
+  function handleDeleteParticipant(participant: Participant): void {
+    const confirmed = window.confirm(
+      `¿Eliminar a ${participant.name} del registro? Podrá volver a registrarse desde su móvil.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingParticipantId(participant.id);
 
     runMutation(
       () =>
         postAction({
-          action: "deleteBotParticipantDuringSetup",
-          payload: { participantId },
+          action: "deleteParticipantDuringSetup",
+          payload: { participantId: participant.id },
         }),
-      "Bot eliminado.",
+      "Participante eliminado del registro.",
       undefined,
       () => {
         setDeletingParticipantId(null);
@@ -3723,6 +3838,17 @@ export function TournamentFlow({
         } else {
           setForcedScreen(null);
         }
+        setActiveMatchId(null);
+      },
+    );
+  }
+
+  function handleForceSemifinalsFromCurrentStandings(): void {
+    runMutation(
+      () => postAction({ action: "forceSemifinalsFromCurrentStandings" }),
+      "Semifinales generadas con el Top 4 provisional.",
+      () => {
+        setForcedScreen("topcut");
         setActiveMatchId(null);
       },
     );
@@ -3911,7 +4037,7 @@ export function TournamentFlow({
         }}
         onAddBotParticipant={handleAddBotParticipant}
         onRenameParticipant={handleRenameParticipant}
-        onDeleteBotParticipant={handleDeleteBotParticipant}
+        onDeleteParticipant={handleDeleteParticipant}
         renamingParticipantId={renamingParticipantId}
         deletingParticipantId={deletingParticipantId}
         onCreateRandomTeams={handleCreateRandomTeams}
@@ -3957,6 +4083,7 @@ export function TournamentFlow({
         onCloseMatch={() => setActiveMatchId(null)}
         activeMatchId={activeMatchId}
         onAdvance={handleAdvanceTournament}
+        onForceSemifinals={handleForceSemifinalsFromCurrentStandings}
         onSync={() => void pullTournamentState()}
         onBack={handleBackFromSwiss}
         isPending={isPending}

@@ -361,6 +361,12 @@ img {
   font-size: 0.64rem;
 }
 
+.registration-status-card .button-primary,
+.registration-status-card .button-secondary {
+  padding: 0.52rem 0.68rem;
+  font-size: 0.58rem;
+}
+
 .registration-qr-card,
 .registration-status-card {
   min-height: 0;
