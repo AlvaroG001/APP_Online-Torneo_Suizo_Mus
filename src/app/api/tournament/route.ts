@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { readTournamentState, writeTournamentState } from "@/lib/store";
+import {
+  clearUploadedPhotos,
+  readTournamentState,
+  writeTournamentState,
+} from "@/lib/store";
 import {
   addBotParticipant,
   advanceTournament,
@@ -42,6 +46,7 @@ export async function POST(request: Request) {
 
     switch (body.action) {
       case "reset":
+        await clearUploadedPhotos();
         nextState = buildTournament(body.payload as Parameters<typeof buildTournament>[0]);
         break;
       case "setPublicBaseUrl":

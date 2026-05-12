@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { TournamentState } from "@/lib/tournament";
 import { createEmptyTournament } from "@/lib/tournament";
@@ -60,6 +60,21 @@ export async function writeTournamentState(
   await ensureStorage();
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
   return state;
+}
+
+export async function clearUploadedPhotos(): Promise<void> {
+  await ensureStorage();
+
+  const entries = await readdir(UPLOADS_DIR, { withFileTypes: true });
+
+  await Promise.all(
+    entries.map((entry) =>
+      rm(path.join(UPLOADS_DIR, entry.name), {
+        force: true,
+        recursive: entry.isDirectory(),
+      }),
+    ),
+  );
 }
 
 function getExtensionForMimeType(mimeType: string): string {
