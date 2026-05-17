@@ -7,7 +7,8 @@
     "dev:local": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "stress": "node scripts/stress-test.mjs"
   },
   "dependencies": {
     "next": "16.2.3",

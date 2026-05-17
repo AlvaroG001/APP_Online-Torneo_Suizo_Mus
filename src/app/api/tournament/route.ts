@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   clearUploadedPhotos,
+  mutateTournamentState,
   readTournamentState,
-  writeTournamentState,
 } from "@/lib/store";
 import {
   addBotParticipant,
@@ -41,107 +41,88 @@ export async function POST(request: Request) {
       payload?: unknown;
     };
 
-    const current = refreshTournamentState(await readTournamentState());
-    let nextState = current;
+    const nextState = await mutateTournamentState(async (storedState) => {
+      const current = refreshTournamentState(storedState);
 
-    switch (body.action) {
-      case "reset":
-        await clearUploadedPhotos();
-        nextState = buildTournament(body.payload as Parameters<typeof buildTournament>[0]);
-        break;
-      case "setPublicBaseUrl":
-        nextState = setPublicBaseUrl(
-          current,
-          String((body.payload as { publicBaseUrl?: string })?.publicBaseUrl ?? ""),
-        );
-        break;
-      case "createRandomTeams":
-        nextState = createRandomTeams(current);
-        break;
-      case "addBotParticipant":
-        nextState = addBotParticipant(current);
-        break;
-      case "prepareManualTeams":
-        nextState = prepareManualTeams(current);
-        break;
-      case "renameParticipantDuringSetup":
-        nextState = renameParticipantDuringSetup(
-          current,
-          body.payload as Parameters<typeof renameParticipantDuringSetup>[1],
-        );
-        break;
-      case "deleteBotParticipantDuringSetup":
-        nextState = deleteBotParticipantDuringSetup(
-          current,
-          body.payload as Parameters<typeof deleteBotParticipantDuringSetup>[1],
-        );
-        break;
-      case "deleteParticipantDuringSetup":
-        nextState = deleteParticipantDuringSetup(
-          current,
-          body.payload as Parameters<typeof deleteParticipantDuringSetup>[1],
-        );
-        break;
-      case "assignParticipantToTeamSlot":
-        nextState = assignParticipantToTeamSlot(
-          current,
-          body.payload as Parameters<typeof assignParticipantToTeamSlot>[1],
-        );
-        break;
-      case "confirmManualTeam":
-        nextState = confirmManualTeam(
-          current,
-          body.payload as Parameters<typeof confirmManualTeam>[1],
-        );
-        break;
-      case "postChatMessage":
-        nextState = postChatMessage(
-          current,
-          body.payload as Parameters<typeof postChatMessage>[1],
-        );
-        break;
-      case "setTeamCustomName":
-        nextState = setTeamCustomName(
-          current,
-          body.payload as Parameters<typeof setTeamCustomName>[1],
-        );
-        break;
-      case "revealSwissGroup":
-        nextState = revealSwissGroup(
-          current,
-          String((body.payload as { bracketLabel?: string })?.bracketLabel ?? ""),
-        );
-        break;
-      case "startTournament":
-      case "startSwiss":
-        nextState = startTournament(current);
-        break;
-      case "reportMatch":
-        nextState = recordMatchResult(
-          current,
-          body.payload as Parameters<typeof recordMatchResult>[1],
-        );
-        break;
-      case "submitMobileMatchResult":
-        nextState = submitMobileMatchResult(
-          current,
-          body.payload as Parameters<typeof submitMobileMatchResult>[1],
-        );
-        break;
-      case "advancePhase":
-        nextState = advanceTournament(current);
-        break;
-      case "forceSemifinalsFromCurrentStandings":
-        nextState = forceSemifinalsFromCurrentStandings(current);
-        break;
-      case "returnToSetup":
-        nextState = returnToSetupPreparation(current);
-        break;
-      default:
-        throw new Error("Acción desconocida.");
-    }
+      switch (body.action) {
+        case "reset":
+          await clearUploadedPhotos();
+          return buildTournament(body.payload as Parameters<typeof buildTournament>[0]);
+        case "setPublicBaseUrl":
+          return setPublicBaseUrl(
+            current,
+            String((body.payload as { publicBaseUrl?: string })?.publicBaseUrl ?? ""),
+          );
+        case "createRandomTeams":
+          return createRandomTeams(current);
+        case "addBotParticipant":
+          return addBotParticipant(current);
+        case "prepareManualTeams":
+          return prepareManualTeams(current);
+        case "renameParticipantDuringSetup":
+          return renameParticipantDuringSetup(
+            current,
+            body.payload as Parameters<typeof renameParticipantDuringSetup>[1],
+          );
+        case "deleteBotParticipantDuringSetup":
+          return deleteBotParticipantDuringSetup(
+            current,
+            body.payload as Parameters<typeof deleteBotParticipantDuringSetup>[1],
+          );
+        case "deleteParticipantDuringSetup":
+          return deleteParticipantDuringSetup(
+            current,
+            body.payload as Parameters<typeof deleteParticipantDuringSetup>[1],
+          );
+        case "assignParticipantToTeamSlot":
+          return assignParticipantToTeamSlot(
+            current,
+            body.payload as Parameters<typeof assignParticipantToTeamSlot>[1],
+          );
+        case "confirmManualTeam":
+          return confirmManualTeam(
+            current,
+            body.payload as Parameters<typeof confirmManualTeam>[1],
+          );
+        case "postChatMessage":
+          return postChatMessage(
+            current,
+            body.payload as Parameters<typeof postChatMessage>[1],
+          );
+        case "setTeamCustomName":
+          return setTeamCustomName(
+            current,
+            body.payload as Parameters<typeof setTeamCustomName>[1],
+          );
+        case "revealSwissGroup":
+          return revealSwissGroup(
+            current,
+            String((body.payload as { bracketLabel?: string })?.bracketLabel ?? ""),
+          );
+        case "startTournament":
+        case "startSwiss":
+          return startTournament(current);
+        case "reportMatch":
+          return recordMatchResult(
+            current,
+            body.payload as Parameters<typeof recordMatchResult>[1],
+          );
+        case "submitMobileMatchResult":
+          return submitMobileMatchResult(
+            current,
+            body.payload as Parameters<typeof submitMobileMatchResult>[1],
+          );
+        case "advancePhase":
+          return advanceTournament(current);
+        case "forceSemifinalsFromCurrentStandings":
+          return forceSemifinalsFromCurrentStandings(current);
+        case "returnToSetup":
+          return returnToSetupPreparation(current);
+        default:
+          throw new Error("Acción desconocida.");
+      }
+    });
 
-    await writeTournamentState(nextState);
     return NextResponse.json(nextState);
   } catch (error) {
     return NextResponse.json(

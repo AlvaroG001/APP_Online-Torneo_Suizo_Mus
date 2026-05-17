@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import {
-  readTournamentState,
+  mutateTournamentState,
   saveParticipantPhoto,
-  writeTournamentState,
 } from "@/lib/store";
 import { refreshTournamentState, registerParticipant } from "@/lib/tournament";
 
@@ -27,16 +26,18 @@ export async function POST(request: Request) {
       throw new Error("La foto es obligatoria.");
     }
 
-    const current = refreshTournamentState(await readTournamentState());
     const savedFile = await saveParticipantPhoto(file, deviceId.trim());
     const photoUrl = `/api/uploads/${savedFile}`;
-    const nextState = registerParticipant(current, {
-      deviceId,
-      name,
-      photoUrl,
+    const nextState = await mutateTournamentState((storedState) => {
+      const current = refreshTournamentState(storedState);
+
+      return registerParticipant(current, {
+        deviceId,
+        name,
+        photoUrl,
+      });
     });
 
-    await writeTournamentState(nextState);
     return NextResponse.json(nextState);
   } catch (error) {
     return NextResponse.json(

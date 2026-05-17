@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readTournamentState, savePlayerPhoto, writeTournamentState } from "@/lib/store";
+import { mutateTournamentState, savePlayerPhoto } from "@/lib/store";
 import { refreshTournamentState, updatePlayerPhoto } from "@/lib/tournament";
 
 export const dynamic = "force-dynamic";
@@ -20,12 +20,14 @@ export async function POST(request: Request) {
       throw new Error("No se ha recibido ninguna imagen.");
     }
 
-    const current = refreshTournamentState(await readTournamentState());
     const savedFile = await savePlayerPhoto(file, teamId, slot);
     const photoUrl = `/api/uploads/${savedFile}`;
-    const nextState = updatePlayerPhoto(current, teamId, slot, photoUrl, playerName);
+    const nextState = await mutateTournamentState((storedState) => {
+      const current = refreshTournamentState(storedState);
 
-    await writeTournamentState(nextState);
+      return updatePlayerPhoto(current, teamId, slot, photoUrl, playerName);
+    });
+
     return NextResponse.json(nextState);
   } catch (error) {
     return NextResponse.json(
@@ -34,4 +36,3 @@ export async function POST(request: Request) {
     );
   }
 }
-

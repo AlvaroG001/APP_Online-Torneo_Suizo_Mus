@@ -1,4 +1,11 @@
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type { TournamentState } from "@/lib/tournament";
 import { createEmptyTournament } from "@/lib/tournament";
@@ -9,6 +16,7 @@ const DATA_DIR = process.env.DATA_DIR
 
 const STATE_FILE = path.join(DATA_DIR, "tournament.json");
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
+let mutationQueue: Promise<void> = Promise.resolve();
 
 async function ensureStorage(): Promise<void> {
   await mkdir(UPLOADS_DIR, { recursive: true });
@@ -58,8 +66,33 @@ export async function writeTournamentState(
   state: TournamentState,
 ): Promise<TournamentState> {
   await ensureStorage();
-  await writeFile(STATE_FILE, JSON.stringify(state, null, 2), "utf8");
+  const tempFile = path.join(
+    DATA_DIR,
+    `.tournament-${process.pid}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.tmp`,
+  );
+
+  await writeFile(tempFile, JSON.stringify(state, null, 2), "utf8");
+  await rename(tempFile, STATE_FILE);
   return state;
+}
+
+export async function mutateTournamentState(
+  mutator: (state: TournamentState) => Promise<TournamentState> | TournamentState,
+): Promise<TournamentState> {
+  const run = mutationQueue.then(async () => {
+    const current = await readTournamentState();
+    const next = await mutator(current);
+    return writeTournamentState(next);
+  });
+
+  mutationQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return run;
 }
 
 export async function clearUploadedPhotos(): Promise<void> {

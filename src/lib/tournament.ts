@@ -2063,6 +2063,20 @@ function ensureMatchScore(state: TournamentState, score: MatchScore): MatchScore
   return normalizedScore;
 }
 
+function completeMatchWithScore(match: Match, score: MatchScore): void {
+  const comparator = scoreComparator(score);
+  const teamAWins = comparator > 0;
+
+  match.status = "completed";
+  match.revealed = true;
+  match.score = {
+    teamA: { ...score.teamA },
+    teamB: { ...score.teamB },
+  };
+  match.winnerId = teamAWins ? match.teamAId : match.teamBId;
+  match.loserId = teamAWins ? match.teamBId : match.teamAId;
+}
+
 export function recordMatchResult(
   state: TournamentState,
   input: MatchResultInput,
@@ -2080,17 +2094,7 @@ export function recordMatchResult(
 
   const normalizedScore = ensureMatchScore(cloned, input.score);
 
-  const comparator = scoreComparator(normalizedScore);
-  const teamAWins = comparator > 0;
-
-  match.status = "completed";
-  match.revealed = true;
-  match.score = {
-    teamA: { ...normalizedScore.teamA },
-    teamB: { ...normalizedScore.teamB },
-  };
-  match.winnerId = teamAWins ? match.teamAId : match.teamBId;
-  match.loserId = teamAWins ? match.teamBId : match.teamAId;
+  completeMatchWithScore(match, normalizedScore);
 
   return refreshTournamentState(cloned);
 }
@@ -2175,19 +2179,23 @@ export function submitMobileMatchResult(
   ];
 
   const { teamAReport, teamBReport } = getMatchMobileResultReportsBySide(match);
+  const teamAReporter = teamA ? getAuthorizedMobileReporter(teamA) : null;
+  const teamBReporter = teamB ? getAuthorizedMobileReporter(teamB) : null;
+  const singleReporterScore =
+    teamAReporter && !teamBReporter
+      ? teamAReport?.score
+      : teamBReporter && !teamAReporter
+        ? teamBReport?.score
+        : null;
 
-  if (teamAReport && teamBReport && matchScoresAreEqual(teamAReport.score, teamBReport.score)) {
-    const comparator = scoreComparator(teamAReport.score);
-    const teamAWins = comparator > 0;
-
-    match.status = "completed";
-    match.revealed = true;
-    match.score = {
-      teamA: { ...teamAReport.score.teamA },
-      teamB: { ...teamAReport.score.teamB },
-    };
-    match.winnerId = teamAWins ? match.teamAId : match.teamBId;
-    match.loserId = teamAWins ? match.teamBId : match.teamAId;
+  if (singleReporterScore) {
+    completeMatchWithScore(match, singleReporterScore);
+  } else if (
+    teamAReport &&
+    teamBReport &&
+    matchScoresAreEqual(teamAReport.score, teamBReport.score)
+  ) {
+    completeMatchWithScore(match, teamAReport.score);
   }
 
   return refreshTournamentState(cloned);
