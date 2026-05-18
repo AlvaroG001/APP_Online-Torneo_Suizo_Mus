@@ -7,6 +7,7 @@ import { InfoHint } from "@/components/info-hint";
 import { TournamentWatermark } from "@/components/tournament-watermark";
 import {
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
@@ -28,6 +29,7 @@ import type {
 } from "@/lib/tournament";
 import {
   TOP_CUT,
+  forceSemifinalsFromCurrentStandings,
   getMatchMobileResultConflict,
   getTournamentStructure,
   isPointsOnlyMatchFormat,
@@ -95,9 +97,220 @@ interface FinalClassificationItem {
 }
 
 type Screen = "url" | "setup" | "registration" | "swiss" | "topcut";
+type TopCutRevealMode = "advance" | "force";
+type PhaseTransitionRevealMode = "semifinalsToFinal";
+
+interface MatchClosedCelebrationEvent {
+  id: string;
+  kind: "matchClosed";
+  match: Match;
+  teamA: Team;
+  teamB: Team;
+  score: MatchScore;
+  winnerId: string;
+  pointsOnlyMode: boolean;
+}
+
+interface ChampionCelebrationEvent {
+  id: string;
+  kind: "champion";
+  team: Team;
+}
+
+type CelebrationEvent = MatchClosedCelebrationEvent | ChampionCelebrationEvent;
+
+interface TopCutRevealState {
+  mode: TopCutRevealMode;
+  items: TopCutFooterItem[];
+}
+
+interface PhaseTransitionRevealState {
+  mode: PhaseTransitionRevealMode;
+  teams: Team[];
+}
+
+interface CelebrationAudioController {
+  muted: boolean;
+  unlocked: boolean;
+  unlock: () => void;
+  toggleMuted: () => void;
+  playMatchWin: () => void;
+  playTopCutReveal: () => void;
+  playFinalReveal: () => void;
+  playShuffleTick: () => void;
+  playChampion: () => void;
+}
+
+interface CelebrationTone {
+  frequency: number;
+  offset: number;
+  duration: number;
+  gain?: number;
+  type?: OscillatorType;
+}
+
+interface CelebrationHit extends CelebrationTone {
+  dropTo?: number;
+}
 
 function subscribeToNothing(): () => void {
   return () => {};
+}
+
+const CELEBRATION_SESSION_KEY = "mus-tournament-celebrations-v1";
+const playedCelebrationAudioIds = new Set<string>();
+
+function claimCelebrationAudio(audioId: string): boolean {
+  const browserAudioIds =
+    typeof window === "undefined"
+      ? null
+      : ((window as Window & { __musCelebrationAudioIds?: Set<string> })
+          .__musCelebrationAudioIds ??= new Set<string>());
+
+  if (playedCelebrationAudioIds.has(audioId) || browserAudioIds?.has(audioId)) {
+    return false;
+  }
+
+  playedCelebrationAudioIds.add(audioId);
+  browserAudioIds?.add(audioId);
+  return true;
+}
+
+function readSeenCelebrationIds(): Set<string> {
+  if (typeof window === "undefined") {
+    return new Set();
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(CELEBRATION_SESSION_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((value): value is string => typeof value === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function writeSeenCelebrationIds(ids: Set<string>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      CELEBRATION_SESSION_KEY,
+      JSON.stringify([...ids].slice(-240)),
+    );
+  } catch {
+    // Session storage is a best-effort guard against replaying old animations.
+  }
+}
+
+function getMatchCelebrationId(match: Match): string | null {
+  if (match.status !== "completed" || !match.winnerId || match.bye || match.marker) {
+    return null;
+  }
+
+  return `match:${match.id}:${match.winnerId}`;
+}
+
+function getChampionCelebrationId(state: TournamentState): string | null {
+  return state.stage === "completed" && state.championTeamId
+    ? `champion:${state.championTeamId}`
+    : null;
+}
+
+function getExistingCelebrationIds(state: TournamentState): string[] {
+  const ids = state.matches
+    .map((match) => getMatchCelebrationId(match))
+    .filter((id): id is string => Boolean(id));
+  const championId = getChampionCelebrationId(state);
+
+  return championId ? [...ids, championId] : ids;
+}
+
+function buildMatchClosedCelebrationEvent(
+  state: TournamentState,
+  match: Match,
+): MatchClosedCelebrationEvent | null {
+  const eventId = getMatchCelebrationId(match);
+  const teamA = match.teamAId ? state.teams.find((team) => team.id === match.teamAId) : null;
+  const teamB = match.teamBId ? state.teams.find((team) => team.id === match.teamBId) : null;
+
+  if (!eventId || !match.winnerId || !match.score || !teamA || !teamB) {
+    return null;
+  }
+
+  return {
+    id: eventId,
+    kind: "matchClosed",
+    match,
+    teamA,
+    teamB,
+    score: match.score,
+    winnerId: match.winnerId,
+    pointsOnlyMode: isPointsOnlyMatchFormat(state.config),
+  };
+}
+
+function buildChampionCelebrationEvent(state: TournamentState): ChampionCelebrationEvent | null {
+  const eventId = getChampionCelebrationId(state);
+  const team = state.championTeamId
+    ? state.teams.find((entry) => entry.id === state.championTeamId)
+    : null;
+
+  if (!eventId || !team) {
+    return null;
+  }
+
+  return {
+    id: eventId,
+    kind: "champion",
+    team,
+  };
+}
+
+function getNewCelebrationEvents(
+  previousState: TournamentState,
+  nextState: TournamentState,
+  seenIds: Set<string>,
+): CelebrationEvent[] {
+  const previousMatchesById = new Map(previousState.matches.map((match) => [match.id, match]));
+  const events: CelebrationEvent[] = [];
+
+  for (const match of nextState.matches) {
+    const eventId = getMatchCelebrationId(match);
+    const previousMatch = previousMatchesById.get(match.id);
+
+    if (
+      eventId &&
+      previousMatch?.status !== "completed" &&
+      !seenIds.has(eventId)
+    ) {
+      const event = buildMatchClosedCelebrationEvent(nextState, match);
+
+      if (event) {
+        events.push(event);
+      }
+    }
+  }
+
+  const championEventId = getChampionCelebrationId(nextState);
+  if (
+    championEventId &&
+    previousState.championTeamId !== nextState.championTeamId &&
+    !seenIds.has(championEventId)
+  ) {
+    const event = buildChampionCelebrationEvent(nextState);
+
+    if (event) {
+      events.push(event);
+    }
+  }
+
+  return events;
 }
 
 function getViewportProfileSnapshot(): {
@@ -176,6 +389,246 @@ function useElementHeight<T extends HTMLElement>(): [RefObject<T | null>, number
   }, []);
 
   return [ref, height];
+}
+
+function useCelebrationAudio(): CelebrationAudioController {
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const [muted, setMuted] = useState(false);
+  const [unlocked, setUnlocked] = useState(false);
+
+  const getAudioContext = useCallback((): AudioContext | null => {
+    if (typeof window === "undefined" || muted) {
+      return null;
+    }
+
+    const AudioContextCtor =
+      window.AudioContext ??
+      (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+    if (!AudioContextCtor) {
+      return null;
+    }
+
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContextCtor();
+    }
+
+    return audioContextRef.current;
+  }, [muted]);
+
+  const unlock = useCallback((): void => {
+    const context = getAudioContext();
+
+    if (!context) {
+      return;
+    }
+
+    void context.resume().then(() => {
+      setUnlocked(true);
+    });
+  }, [getAudioContext]);
+
+  const playAudioPattern = useCallback(({
+    tones = [],
+    hits = [],
+  }: {
+    tones?: CelebrationTone[];
+    hits?: CelebrationHit[];
+  }): void => {
+    const context = getAudioContext();
+
+    if (!context) {
+      return;
+    }
+
+    void context.resume().then(() => {
+      setUnlocked(true);
+      const startTime = context.currentTime + 0.02;
+
+      for (const tone of tones) {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const toneStart = startTime + tone.offset;
+        oscillator.type = tone.type ?? "triangle";
+        oscillator.frequency.setValueAtTime(tone.frequency, toneStart);
+        gain.gain.setValueAtTime(0.0001, toneStart);
+        gain.gain.exponentialRampToValueAtTime(tone.gain ?? 0.055, toneStart + 0.025);
+        gain.gain.exponentialRampToValueAtTime(0.0001, toneStart + tone.duration);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(toneStart);
+        oscillator.stop(toneStart + tone.duration + 0.02);
+      }
+
+      for (const hit of hits) {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const hitStart = startTime + hit.offset;
+        oscillator.type = hit.type ?? "square";
+        oscillator.frequency.setValueAtTime(hit.frequency, hitStart);
+        oscillator.frequency.exponentialRampToValueAtTime(
+          hit.dropTo ?? Math.max(40, hit.frequency * 0.46),
+          hitStart + hit.duration,
+        );
+        gain.gain.setValueAtTime(0.0001, hitStart);
+        gain.gain.exponentialRampToValueAtTime(hit.gain ?? 0.035, hitStart + 0.006);
+        gain.gain.exponentialRampToValueAtTime(0.0001, hitStart + hit.duration);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(hitStart);
+        oscillator.stop(hitStart + hit.duration + 0.02);
+      }
+    });
+  }, [getAudioContext]);
+
+  const toggleMuted = useCallback(() => {
+    setMuted((current) => !current);
+  }, []);
+  const playMatchWin = useCallback(
+    () => {
+      playAudioPattern({
+        hits: [
+          ...Array.from({ length: 16 }, (_, index) => ({
+            offset: index * 0.18,
+            duration: 0.045,
+            frequency: index % 4 === 0 ? 120 : 820,
+            gain: index % 4 === 0 ? 0.052 : 0.022,
+            type: index % 4 === 0 ? ("sine" as OscillatorType) : ("square" as OscillatorType),
+          })),
+          ...Array.from({ length: 10 }, (_, index) => ({
+            offset: 0.09 + index * 0.27,
+            duration: 0.026,
+            frequency: 1280 + index * 24,
+            gain: 0.018,
+            type: "triangle" as OscillatorType,
+          })),
+        ],
+        tones: [
+          { frequency: 392, offset: 0, duration: 0.12, gain: 0.04, type: "triangle" },
+          { frequency: 493.88, offset: 0.18, duration: 0.12, gain: 0.04, type: "triangle" },
+          { frequency: 587.33, offset: 0.36, duration: 0.14, gain: 0.044, type: "triangle" },
+          { frequency: 783.99, offset: 0.6, duration: 0.18, gain: 0.05, type: "triangle" },
+          { frequency: 659.25, offset: 0.92, duration: 0.14, gain: 0.042, type: "triangle" },
+          { frequency: 783.99, offset: 1.1, duration: 0.16, gain: 0.046, type: "triangle" },
+          { frequency: 987.77, offset: 1.34, duration: 0.2, gain: 0.054, type: "triangle" },
+          { frequency: 1174.66, offset: 1.68, duration: 0.54, gain: 0.05, type: "sine" },
+          { frequency: 293.66, offset: 0, duration: 3.2, gain: 0.016, type: "sine" },
+          { frequency: 440, offset: 0, duration: 3.2, gain: 0.014, type: "sine" },
+        ],
+      });
+    },
+    [playAudioPattern],
+  );
+  const playTopCutReveal = useCallback(
+    () =>
+      playAudioPattern({
+        hits: Array.from({ length: 30 }, (_, index) => ({
+          offset: index * 0.095,
+          duration: index % 6 === 0 ? 0.055 : 0.026,
+          frequency: index % 6 === 0 ? 128 : 760 + (index % 5) * 80,
+          gain: index % 6 === 0 ? 0.05 : 0.018,
+          type: index % 6 === 0 ? ("sine" as OscillatorType) : ("square" as OscillatorType),
+        })),
+        tones: [
+          { frequency: 196, offset: 0, duration: 4.4, type: "sine", gain: 0.014 },
+          { frequency: 392, offset: 0.08, duration: 0.12, type: "square", gain: 0.03 },
+          { frequency: 493.88, offset: 0.28, duration: 0.12, type: "square", gain: 0.032 },
+          { frequency: 587.33, offset: 0.48, duration: 0.12, type: "square", gain: 0.034 },
+          { frequency: 783.99, offset: 0.72, duration: 0.16, gain: 0.046 },
+          { frequency: 587.33, offset: 1.06, duration: 0.1, type: "square", gain: 0.03 },
+          { frequency: 783.99, offset: 1.22, duration: 0.1, type: "square", gain: 0.032 },
+          { frequency: 987.77, offset: 1.38, duration: 0.16, gain: 0.048 },
+          { frequency: 659.25, offset: 3.55, duration: 0.16, gain: 0.052 },
+          { frequency: 783.99, offset: 3.78, duration: 0.16, gain: 0.056 },
+          { frequency: 987.77, offset: 4.02, duration: 0.22, gain: 0.064 },
+          { frequency: 1318.51, offset: 4.36, duration: 0.75, gain: 0.064 },
+        ],
+      }),
+    [playAudioPattern],
+  );
+  const playFinalReveal = useCallback(
+    () =>
+      playAudioPattern({
+        hits: Array.from({ length: 12 }, (_, index) => ({
+          offset: 0.18 + index * 0.18,
+          duration: 0.04,
+          frequency: 170 + (index % 3) * 38,
+          gain: 0.03,
+          type: "triangle" as OscillatorType,
+        })),
+        tones: [
+          { frequency: 261.63, offset: 0, duration: 2.8, gain: 0.018, type: "sine" },
+          { frequency: 392, offset: 0.08, duration: 0.34, gain: 0.052, type: "sawtooth" },
+          { frequency: 523.25, offset: 0.08, duration: 0.34, gain: 0.04, type: "sawtooth" },
+          { frequency: 392, offset: 0.58, duration: 0.34, gain: 0.052, type: "sawtooth" },
+          { frequency: 587.33, offset: 0.58, duration: 0.34, gain: 0.042, type: "sawtooth" },
+          { frequency: 440, offset: 1.1, duration: 0.28, gain: 0.054, type: "sawtooth" },
+          { frequency: 659.25, offset: 1.1, duration: 0.28, gain: 0.046, type: "sawtooth" },
+          { frequency: 523.25, offset: 1.58, duration: 0.32, gain: 0.06, type: "sawtooth" },
+          { frequency: 783.99, offset: 1.58, duration: 0.32, gain: 0.05, type: "sawtooth" },
+          { frequency: 1046.5, offset: 2.14, duration: 0.9, gain: 0.06, type: "triangle" },
+        ],
+      }),
+    [playAudioPattern],
+  );
+  const playShuffleTick = useCallback(
+    () =>
+      playAudioPattern({
+        tones: [{ frequency: 880, offset: 0, duration: 0.035, type: "square", gain: 0.026 }],
+      }),
+    [playAudioPattern],
+  );
+  const playChampion = useCallback(
+    () => {
+      playAudioPattern({
+        hits: Array.from({ length: 28 }, (_, index) => ({
+          offset: index * 0.145,
+          duration: index % 4 === 0 ? 0.06 : 0.03,
+          frequency: index % 4 === 0 ? 95 : 1120 + (index % 5) * 90,
+          gain: index % 4 === 0 ? 0.062 : 0.024,
+          type: index % 4 === 0 ? ("sine" as OscillatorType) : ("square" as OscillatorType),
+        })),
+        tones: [
+          { frequency: 146.83, offset: 0, duration: 4.8, gain: 0.024, type: "sine" },
+          { frequency: 220, offset: 0, duration: 4.8, gain: 0.02, type: "sine" },
+          { frequency: 440, offset: 0.05, duration: 0.18, gain: 0.05 },
+          { frequency: 554.37, offset: 0.28, duration: 0.18, gain: 0.052 },
+          { frequency: 659.25, offset: 0.5, duration: 0.2, gain: 0.056 },
+          { frequency: 880, offset: 0.78, duration: 0.22, gain: 0.062 },
+          { frequency: 1108.73, offset: 1.08, duration: 0.24, gain: 0.066 },
+          { frequency: 880, offset: 1.48, duration: 0.18, gain: 0.05 },
+          { frequency: 987.77, offset: 1.7, duration: 0.18, gain: 0.054 },
+          { frequency: 1174.66, offset: 1.94, duration: 0.22, gain: 0.06 },
+          { frequency: 1318.51, offset: 2.26, duration: 0.28, gain: 0.07 },
+          { frequency: 1760, offset: 2.66, duration: 0.72, gain: 0.064 },
+          { frequency: 2217.46, offset: 3.38, duration: 1.08, gain: 0.048, type: "sine" },
+        ],
+      });
+    },
+    [playAudioPattern],
+  );
+
+  return useMemo(() => ({
+    muted,
+    unlocked,
+    unlock,
+    toggleMuted,
+    playMatchWin,
+    playTopCutReveal,
+    playFinalReveal,
+    playShuffleTick,
+    playChampion,
+  }), [
+    muted,
+    unlocked,
+    unlock,
+    toggleMuted,
+    playMatchWin,
+    playTopCutReveal,
+    playFinalReveal,
+    playShuffleTick,
+    playChampion,
+  ]);
 }
 
 function getBrowserOriginSnapshot(): string {
@@ -293,36 +746,21 @@ function getCurrentPlayoffMatches(state: TournamentState): Match[] {
   return [];
 }
 
-function getNextTopRank(items: TopCutFooterItem[]): 1 | 2 | 3 | 4 | null {
-  const used = new Set(items.map((item) => item.topRank));
-
-  for (const rank of [1, 2, 3, 4] as const) {
-    if (!used.has(rank)) {
-      return rank;
-    }
+function getCompletedSemifinalWinners(state: TournamentState): Team[] {
+  if (state.stage !== "semifinals") {
+    return [];
   }
 
-  return null;
-}
+  const teamsById = new Map(state.teams.map((team) => [team.id, team]));
 
-function addProjectedTopCutItem(
-  items: TopCutFooterItem[],
-  team: Team | null | undefined,
-): TopCutFooterItem[] {
-  if (!team || items.some((item) => item.team.id === team.id)) {
-    return items;
-  }
-
-  const topRank = getNextTopRank(items);
-  if (!topRank) {
-    return items;
-  }
-
-  return [...items, { team, topRank }];
+  return getCurrentPlayoffMatches(state)
+    .filter((match) => match.status === "completed" && Boolean(match.winnerId))
+    .map((match) => teamsById.get(match.winnerId ?? ""))
+    .filter((team): team is Team => Boolean(team));
 }
 
 function getTopCutFooterItems(state: TournamentState): TopCutFooterItem[] {
-  let items = state.matches
+  return state.matches
     .filter(
       (match) =>
         match.stage === "swiss" &&
@@ -336,55 +774,8 @@ function getTopCutFooterItems(state: TournamentState): TopCutFooterItem[] {
         ? { team, topRank: match.topRank as 1 | 2 | 3 | 4 }
         : null;
     })
-    .filter((item): item is TopCutFooterItem => Boolean(item));
-
-  const currentPlayableMatches = state.matches.filter(
-    (match) =>
-      match.stage === "swiss" &&
-      !match.marker &&
-      match.roundIndex === state.currentSwissRound,
-  );
-  const currentGroups = new Map<string, Match[]>();
-
-  for (const match of currentPlayableMatches) {
-    currentGroups.set(match.bracketLabel, [
-      ...(currentGroups.get(match.bracketLabel) ?? []),
-      match,
-    ]);
-  }
-
-  for (const label of [...currentGroups.keys()].sort((left, right) => {
-    const leftRecord = parseRecordLabel(left);
-    const rightRecord = parseRecordLabel(right);
-    return rightRecord.wins - leftRecord.wins || leftRecord.losses - rightRecord.losses;
-  })) {
-    const matches = currentGroups.get(label) ?? [];
-    const { losses } = parseRecordLabel(label);
-
-    if (matches.length !== 1 || items.length >= TOP_CUT) {
-      continue;
-    }
-
-    const match = matches[0];
-    if (match.status !== "completed") {
-      continue;
-    }
-
-    const winner = match.winnerId ? state.teams.find((team) => team.id === match.winnerId) : null;
-    const loser = match.loserId ? state.teams.find((team) => team.id === match.loserId) : null;
-    const remainingSlots = TOP_CUT - items.length;
-
-    if (losses === 0) {
-      items = addProjectedTopCutItem(items, winner);
-    } else if (remainingSlots === 2 && winner && loser) {
-      items = addProjectedTopCutItem(items, winner);
-      items = addProjectedTopCutItem(items, loser);
-    } else if (losses === 1) {
-      items = addProjectedTopCutItem(items, winner);
-    }
-  }
-
-  return items.toSorted((left, right) => left.topRank - right.topRank);
+    .filter((item): item is TopCutFooterItem => Boolean(item))
+    .toSorted((left, right) => left.topRank - right.topRank);
 }
 
 function compareFinalClassificationTeams(left: Team, right: Team): number {
@@ -423,6 +814,22 @@ function getFinalClassificationItems(
     }));
 
   return [...topItems, ...restItems];
+}
+
+function getSemifinalRevealItems(state: TournamentState): TopCutFooterItem[] {
+  const explicitTopCutItems = getTopCutFooterItems(state);
+
+  if (explicitTopCutItems.length >= TOP_CUT) {
+    return explicitTopCutItems.slice(0, TOP_CUT);
+  }
+
+  return state.teams
+    .toSorted(compareFinalClassificationTeams)
+    .slice(0, TOP_CUT)
+    .map((team, index) => ({
+      team,
+      topRank: (index + 1) as 1 | 2 | 3 | 4,
+    }));
 }
 
 function buildSwissColumns(state: TournamentState): SwissColumn[] {
@@ -687,6 +1094,427 @@ function StageBadge({ label }: { label: string }) {
   );
 }
 
+function seededRatio(seed: string, index: number): number {
+  let hash = 2166136261;
+  const input = `${seed}:${index}`;
+
+  for (let charIndex = 0; charIndex < input.length; charIndex += 1) {
+    hash ^= input.charCodeAt(charIndex);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0) / 4294967295;
+}
+
+function ConfettiBurst({ seed, intensity = "regular" }: { seed: string; intensity?: "regular" | "final" }) {
+  const count = intensity === "final" ? 110 : 72;
+
+  return (
+    <div className="celebration-confetti" aria-hidden="true">
+      {Array.from({ length: count }, (_, index) => {
+        const x = Math.round(seededRatio(seed, index) * 100);
+        const drift = Math.round((seededRatio(seed, index + 97) - 0.5) * 52);
+        const delay = seededRatio(seed, index + 191) * 0.65;
+        const duration = 2.1 + seededRatio(seed, index + 311) * 1.4;
+        const rotation = Math.round(seededRatio(seed, index + 431) * 720);
+        const hue = index % 5 === 0 ? "#f8d85a" : index % 3 === 0 ? "#f2f7ee" : "#7cff4f";
+
+        return (
+          <span
+            key={`${seed}-confetti-${index}`}
+            className="celebration-confetti__piece"
+            style={
+              {
+                "--confetti-x": `${x}vw`,
+                "--confetti-drift": `${drift}vw`,
+                "--confetti-delay": `${delay}s`,
+                "--confetti-duration": `${duration}s`,
+                "--confetti-rotation": `${rotation}deg`,
+                "--confetti-color": hue,
+              } as CSSProperties
+            }
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function CrownIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 64 44"
+      className={className}
+      role="img"
+      aria-label="Corona de ganador"
+    >
+      <path
+        d="M6 14l12 10L32 5l14 19 12-10-7 25H13L6 14z"
+        fill="currentColor"
+      />
+      <path
+        d="M14 39h36"
+        fill="none"
+        stroke="rgba(2,4,3,0.55)"
+        strokeLinecap="round"
+        strokeWidth="4"
+      />
+    </svg>
+  );
+}
+
+function CelebrationTeamPortraits({
+  team,
+  showCrowns,
+  tone,
+}: {
+  team: Team;
+  showCrowns: boolean;
+  tone: "winner" | "loser";
+}) {
+  return (
+    <div className={`celebration-team-portraits celebration-team-portraits--${tone}`}>
+      {team.players.map((player, index) => (
+        <div key={`${team.id}-${tone}-${player.slot}`} className="celebration-team-portrait">
+          {showCrowns ? <CrownIcon className="celebration-player-crown" /> : null}
+          <div className="celebration-team-portrait__photo">
+            {player.photoUrl ? (
+              <img src={player.photoUrl} alt={playerName(team, index)} />
+            ) : (
+              <span>{index === 0 ? "A" : "B"}</span>
+            )}
+          </div>
+          <p>{playerName(team, index)}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CelebrationTeamPanel({
+  team,
+  score,
+  isWinner,
+  label,
+}: {
+  team: Team;
+  score: number;
+  isWinner: boolean;
+  label: string;
+}) {
+  return (
+    <article
+      className={`celebration-team-panel ${
+        isWinner ? "celebration-team-panel--winner" : "celebration-team-panel--loser"
+      }`}
+    >
+      <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--muted)]">
+        {label}
+      </p>
+      <CelebrationTeamPortraits
+        team={team}
+        showCrowns={isWinner}
+        tone={isWinner ? "winner" : "loser"}
+      />
+      <h3 className="mt-4 truncate text-center text-4xl font-black tracking-tight text-[var(--foreground)]">
+        {team.name}
+      </h3>
+      <p className="mt-1 truncate text-center text-sm text-[var(--muted)]">
+        {playerName(team, 0)} · {playerName(team, 1)}
+      </p>
+      <div className="mt-5 flex justify-center">
+        <span className="celebration-score">{score}</span>
+      </div>
+    </article>
+  );
+}
+
+function MatchCelebrationOverlay({
+  event,
+  audio,
+  onDone,
+}: {
+  event: MatchClosedCelebrationEvent;
+  audio: CelebrationAudioController;
+  onDone: () => void;
+}) {
+  const audioRef = useRef(audio);
+  const onDoneRef = useRef(onDone);
+  const { match, teamA, teamB, score, pointsOnlyMode } = event;
+  const scoreA = pointsOnlyMode ? score.teamA.points : score.teamA.vacas;
+  const scoreB = pointsOnlyMode ? score.teamB.points : score.teamB.vacas;
+
+  useEffect(() => {
+    audioRef.current = audio;
+    onDoneRef.current = onDone;
+  }, [audio, onDone]);
+
+  useEffect(() => {
+    if (claimCelebrationAudio(`match:${event.id}`)) {
+      audioRef.current.playMatchWin();
+    }
+
+    const timeoutId = window.setTimeout(() => onDoneRef.current(), 7800);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [event.id]);
+
+  const winnerIsTeamA = event.winnerId === teamA.id;
+
+  return (
+    <div className="celebration-overlay" role="status" aria-live="polite">
+      <ConfettiBurst seed={event.id} />
+      <div className="celebration-card celebration-card--match">
+        <div className="celebration-card__header">
+          <p>Mesa cerrada</p>
+          <span>
+            {match.bracketLabel} · mesa {match.table}
+          </span>
+        </div>
+        <div className="celebration-match-title">
+          <span>Resultado validado</span>
+          <strong>{formatScoreSummary(score, pointsOnlyMode)}</strong>
+        </div>
+        <div className="celebration-result-grid">
+          <CelebrationTeamPanel
+            team={teamA}
+            score={scoreA}
+            isWinner={winnerIsTeamA}
+            label={winnerIsTeamA ? "Ganadores" : "Rival"}
+          />
+          <div className="celebration-versus">
+            <span>La mesa pasa a cerrada y el resultado queda bloqueado.</span>
+            <strong>VS</strong>
+          </div>
+          <CelebrationTeamPanel
+            team={teamB}
+            score={scoreB}
+            isWinner={!winnerIsTeamA}
+            label={!winnerIsTeamA ? "Ganadores" : "Rival"}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopCutRevealOverlay({
+  reveal,
+  audio,
+  onDone,
+}: {
+  reveal: TopCutRevealState;
+  audio: CelebrationAudioController;
+  onDone: () => void;
+}) {
+  const audioRef = useRef(audio);
+  const onDoneRef = useRef(onDone);
+  const sortedItems = reveal.items.toSorted((left, right) => left.topRank - right.topRank);
+  const revealKey = `${reveal.mode}:${sortedItems.map((item) => `${item.topRank}-${item.team.id}`).join("|")}`;
+  const itemByRank = new Map(sortedItems.map((item) => [item.topRank, item]));
+
+  useEffect(() => {
+    audioRef.current = audio;
+    onDoneRef.current = onDone;
+  }, [audio, onDone]);
+
+  useEffect(() => {
+    const shouldPlayAudio = claimCelebrationAudio(`topcut:${revealKey}`);
+    const doneId = window.setTimeout(() => onDoneRef.current(), 9800);
+
+    if (shouldPlayAudio) {
+      audioRef.current.playTopCutReveal();
+    }
+
+    return () => {
+      window.clearTimeout(doneId);
+    };
+  }, [revealKey]);
+
+  const slotItems = [
+    { label: "Semifinal 1", left: itemByRank.get(1), right: itemByRank.get(4) },
+    { label: "Semifinal 2", left: itemByRank.get(2), right: itemByRank.get(3) },
+  ];
+
+  return (
+    <div className="celebration-overlay celebration-overlay--topcut" role="status" aria-live="polite">
+      <ConfettiBurst seed={`topcut-${sortedItems.map((item) => item.team.id).join("-")}`} />
+      <div className="celebration-card celebration-card--topcut">
+        <div className="celebration-card__header">
+          <p>Top 4 confirmado</p>
+          <span>Las parejas toman posición</span>
+        </div>
+
+        <div className="topcut-reveal-row">
+          {sortedItems.map(({ team, topRank }, index) => (
+            <article
+              key={`${team.id}-topcut-reveal`}
+              className={`topcut-reveal-card topcut-reveal-card--rank-${topRank} topcut-reveal-card--fly-${topRank}`}
+              style={{ animationDelay: `${index * 260}ms` }}
+            >
+              {topRank === 1 ? <CrownIcon className="topcut-reveal-card__crown" /> : null}
+              <p>Top {topRank}</p>
+              <TeamFaces team={team} size={topRank === 1 ? "xl" : "lg"} />
+              <h3>{team.name}</h3>
+              <span>{team.pointsWon} pts</span>
+            </article>
+          ))}
+        </div>
+
+        <div className="topcut-slots" aria-hidden="true">
+          {slotItems.map((slot) => (
+            <div key={slot.label} className="topcut-slot">
+              <span>{slot.label}</span>
+              <strong>{slot.left?.team.name ?? "Top"}</strong>
+              <em>vs</em>
+              <strong>{slot.right?.team.name ?? "Top"}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PhaseTransitionOverlay({
+  reveal,
+  audio,
+  onDone,
+}: {
+  reveal: PhaseTransitionRevealState;
+  audio: CelebrationAudioController;
+  onDone: () => void;
+}) {
+  const audioRef = useRef(audio);
+  const onDoneRef = useRef(onDone);
+  const revealKey = `${reveal.mode}:${reveal.teams.map((team) => team.id).join("|")}`;
+
+  useEffect(() => {
+    audioRef.current = audio;
+    onDoneRef.current = onDone;
+  }, [audio, onDone]);
+
+  useEffect(() => {
+    const shouldPlayAudio = claimCelebrationAudio(`phase:${revealKey}`);
+    const doneId = window.setTimeout(() => onDoneRef.current(), 7200);
+
+    if (shouldPlayAudio) {
+      audioRef.current.playFinalReveal();
+    }
+
+    return () => {
+      window.clearTimeout(doneId);
+    };
+  }, [revealKey]);
+
+  return (
+    <div className="celebration-overlay celebration-overlay--phase" role="status" aria-live="polite">
+      <ConfettiBurst seed={`phase-${reveal.teams.map((team) => team.id).join("-")}`} />
+      <div className="celebration-card celebration-card--phase">
+        <div className="celebration-card__header">
+          <p>Final preparada</p>
+          <span>Los ganadores toman posición</span>
+        </div>
+
+        <div className="phase-transition-track">
+          {reveal.teams.map((team, index) => (
+            <article
+              key={`${team.id}-phase-transition`}
+              className={`phase-transition-card phase-transition-card--${index + 1}`}
+            >
+              <p>Finalista {index + 1}</p>
+              <TeamFaces team={team} size="xl" />
+              <h3>{team.name}</h3>
+              <span>{team.pointsWon} pts</span>
+            </article>
+          ))}
+        </div>
+
+        <div className="phase-final-slot" aria-hidden="true">
+          <strong>{reveal.teams[0]?.name ?? "Finalista"}</strong>
+          <em>vs</em>
+          <strong>{reveal.teams[1]?.name ?? "Finalista"}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChampionCelebrationOverlay({
+  event,
+  audio,
+  onDone,
+}: {
+  event: ChampionCelebrationEvent;
+  audio: CelebrationAudioController;
+  onDone: () => void;
+}) {
+  const audioRef = useRef(audio);
+  const onDoneRef = useRef(onDone);
+  const { team } = event;
+
+  useEffect(() => {
+    audioRef.current = audio;
+    onDoneRef.current = onDone;
+  }, [audio, onDone]);
+
+  useEffect(() => {
+    if (claimCelebrationAudio(`champion:${event.id}`)) {
+      audioRef.current.playChampion();
+    }
+
+    const timeoutId = window.setTimeout(() => onDoneRef.current(), 8600);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [event.id]);
+
+  return (
+    <div className="celebration-overlay celebration-overlay--champion" role="status" aria-live="polite">
+      <ConfettiBurst seed={event.id} intensity="final" />
+      <div className="celebration-card celebration-card--champion">
+        <div className="champion-trophy" aria-hidden="true">
+          <div className="champion-trophy__cup" />
+          <div className="champion-trophy__stem" />
+          <div className="champion-trophy__base" />
+        </div>
+        <p className="font-mono text-xs uppercase tracking-[0.3em] text-[var(--accent)]">
+          Campeones
+        </p>
+        <CelebrationTeamPortraits team={team} showCrowns tone="winner" />
+        <h2 className="mt-5 text-center text-6xl font-black tracking-tight text-[var(--foreground)]">
+          {team.name}
+        </h2>
+        <p className="mt-2 text-center text-lg text-[var(--muted)]">
+          {playerName(team, 0)} · {playerName(team, 1)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CelebrationAudioToggle({
+  audio,
+}: {
+  audio: CelebrationAudioController;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        audio.unlock();
+        if (audio.unlocked || audio.muted) {
+          audio.toggleMuted();
+        }
+      }}
+      className="celebration-audio-toggle"
+      aria-pressed={!audio.muted}
+      title={audio.muted ? "Activar sonido de celebraciones" : "Silenciar celebraciones"}
+    >
+      {audio.muted ? "Sonido off" : audio.unlocked ? "Sonido on" : "Activar sonido"}
+    </button>
+  );
+}
+
 function StepPreviewPlayerRow({
   team,
   index,
@@ -766,6 +1594,8 @@ function ScreenFrame({
   leftSlot,
   rightSlot,
   activeUrl,
+  hideWatermark = false,
+  headerLogo = false,
   children,
 }: {
   eyebrow: string;
@@ -774,15 +1604,20 @@ function ScreenFrame({
   leftSlot?: ReactNode;
   rightSlot?: ReactNode;
   activeUrl?: string;
+  hideWatermark?: boolean;
+  headerLogo?: boolean;
   children: ReactNode;
 }) {
   const viewportProfile = useViewportProfile();
+  const headerGridClass = headerLogo
+    ? "admin-header admin-header--with-logo grid gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-4 shadow-[0_35px_120px_rgba(0,0,0,0.28)] md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:p-4"
+    : "admin-header grid gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-4 shadow-[0_35px_120px_rgba(0,0,0,0.28)] md:grid-cols-[1fr_auto] md:p-4";
 
   return (
     <div className="relative h-[100svh] overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.055)_0%,transparent_34%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,transparent_0%,rgba(255,255,255,0.03)_50%,transparent_100%)] opacity-40" />
-      <TournamentWatermark />
+      {hideWatermark ? null : <TournamentWatermark />}
 
       <main
         className="admin-shell relative z-10 mx-auto flex h-[100svh] w-full max-w-[1920px] flex-col overflow-hidden px-3 py-4 md:px-4 md:py-5 2xl:px-5"
@@ -794,7 +1629,7 @@ function ScreenFrame({
           } as CSSProperties
         }
       >
-        <header className="admin-header grid gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-4 shadow-[0_35px_120px_rgba(0,0,0,0.28)] md:grid-cols-[1fr_auto] md:p-4">
+        <header className={headerGridClass}>
           <div className="max-w-4xl">
             {leftSlot ? <div className="mb-2">{leftSlot}</div> : null}
             <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--accent)]">
@@ -809,6 +1644,20 @@ function ScreenFrame({
               </p>
             ) : null}
           </div>
+          {headerLogo ? (
+            <div className="registration-header-logo">
+              <img
+                src="/logo_torneo.png"
+                alt="Logo del torneo"
+                style={{
+                  width: "clamp(5.5rem, 7vw, 8rem)",
+                  maxHeight: "clamp(5.5rem, 11vh, 8rem)",
+                  objectFit: "contain",
+                  opacity: 1,
+                }}
+              />
+            </div>
+          ) : null}
           <div className="flex min-h-full flex-col items-end justify-between gap-4 md:justify-self-end">
             {rightSlot ? <div className="flex flex-wrap justify-end gap-2">{rightSlot}</div> : null}
             <div className="max-w-[min(44vw,620px)] text-right">
@@ -1481,6 +2330,8 @@ function RegistrationStageScreen({
         eyebrow="Paso 3 · Registro y parejas"
         title="Registro y parejas"
         activeUrl={state.config.publicBaseUrl}
+        hideWatermark
+        headerLogo
         leftSlot={<BackButton label="Volver a configuración" onClick={onBack} />}
         rightSlot={
           <div className="flex flex-wrap gap-2">
@@ -2375,10 +3226,9 @@ function SwissStageScreen({
   activeMatchId,
   onAdvance,
   onForceSemifinals,
-  onSync,
   onBack,
   isPending,
-  isSyncing,
+  celebrationLocked,
   feedback,
 }: {
   state: TournamentState;
@@ -2396,10 +3246,9 @@ function SwissStageScreen({
   activeMatchId: string | null;
   onAdvance: () => void;
   onForceSemifinals: () => void;
-  onSync: () => void;
   onBack: () => void;
   isPending: boolean;
-  isSyncing: boolean;
+  celebrationLocked: boolean;
   feedback: FeedbackState | null;
 }) {
   const structure = getTournamentStructure(state.config.teamCount, state.config.format);
@@ -2410,11 +3259,6 @@ function SwissStageScreen({
     [state.teams],
   );
   const currentRoundMatches = getCurrentSwissMatches(state);
-  const hiddenGroupCount = new Set(
-    currentRoundMatches
-      .filter((match) => !match.revealed)
-      .map((match) => match.bracketLabel),
-  ).size;
   const allGroupsDrawn =
     currentRoundMatches.length > 0 &&
     currentRoundMatches.every((match) => match.revealed);
@@ -2422,9 +3266,6 @@ function SwissStageScreen({
     allGroupsDrawn &&
     currentRoundMatches.length > 0 &&
     currentRoundMatches.every((match) => match.status === "completed");
-  const pendingMatchesCount = currentRoundMatches.filter(
-    (match) => match.status !== "completed",
-  ).length;
   const topCutFooterItems = useMemo(() => getTopCutFooterItems(state), [state]);
   const qualifiedTopCutCount = topCutFooterItems.length;
   const canAdvanceToTopCut = structure.topCut > 0 && qualifiedTopCutCount >= structure.topCut;
@@ -2437,7 +3278,7 @@ function SwissStageScreen({
     structure.topCut > 0
       ? canAdvanceToTopCut
         ? "SEMIFINALES"
-        : "Preparar siguiente ronda"
+        : "Siguiente ronda"
       : state.currentSwissRound >= state.swissRoundsPlanned
         ? "Cerrar clasificación final"
         : "Pasar a la siguiente ronda";
@@ -2486,7 +3327,7 @@ function SwissStageScreen({
         : "roomy";
   const fallbackSwissBoardHeight = Math.max(
     320,
-    viewportProfile.height - (viewportProfile.density === "compact" ? 142 : 166),
+    viewportProfile.height - (viewportProfile.density === "compact" ? 108 : 132),
   );
   const swissBoardHeight = Math.max(320, measuredSwissBoardHeight || fallbackSwissBoardHeight);
   const swissBoxGap = viewportProfile.density === "compact" ? 6 : 8;
@@ -2624,20 +3465,9 @@ function SwissStageScreen({
     <div className="relative h-[100svh] overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.05)_0%,transparent_30%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
       <TournamentWatermark variant="swiss" />
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {columns.map((column) => (
-          <div
-            key={`ghost-${column.depth}`}
-            className="absolute top-8 text-[28rem] font-black leading-none tracking-normal text-[rgba(124,255,79,0.06)]"
-            style={{ left: `${column.depth * 18 + 1}rem` }}
-          >
-            {column.depth}
-          </div>
-        ))}
-      </div>
 
       <main
-        className="swiss-dashboard relative z-10 mx-auto grid h-[100svh] w-full max-w-none grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden px-2 py-2 md:px-3"
+        className="swiss-dashboard relative z-10 mx-auto grid h-[100svh] w-full max-w-none overflow-hidden px-2 py-2 md:px-3"
         data-density={viewportProfile.density}
         data-swiss-density={swissDensity}
         data-match-density={swissMatchTileDensity}
@@ -2650,40 +3480,53 @@ function SwissStageScreen({
             "--swiss-max-items": maxBoxItems,
             "--swiss-item-width": `${swissItemWidth}px`,
             "--swiss-item-gap": `${swissItemGap}px`,
+            gridTemplateRows:
+              topCutFooterItems.length > 0 ? "auto auto minmax(0, 1fr)" : "auto minmax(0, 1fr)",
           } as CSSProperties
         }
       >
-        <header className="grid min-h-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-2 py-1.5">
-          <div className="flex min-w-0 items-center gap-2">
+        <header className="flex min-h-0 flex-wrap items-center gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-2 py-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <button type="button" onClick={onBack} className="swiss-back-button button-secondary">
               ← Volver al registro
             </button>
             <p className="truncate font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--accent)]">
               Paso 4 · Swiss Stage
             </p>
-            <InfoHint label="Sortea cada tramo y abre solo la mesa que quieras cerrar." />
+              <InfoHint label="Sortea cada tramo y abre solo la mesa que quieras cerrar." />
           </div>
 
-          {nextDrawableGroupLabel ? (
+          <div className="flex min-w-0 flex-none flex-wrap items-center justify-end gap-2">
+            {nextDrawableGroupLabel ? (
+              <button
+                type="button"
+                onClick={() => onRevealGroup(nextDrawableGroupLabel)}
+                className="swiss-draw-button button-primary"
+              >
+                Sortear {nextDrawableGroupLabel}
+              </button>
+            ) : null}
+            <StageBadge label={`Ronda ${state.currentSwissRound} / ${state.swissRoundsPlanned}`} />
+            {structure.topCut > 0 ? (
+              <button
+                type="button"
+                onClick={onForceSemifinals}
+                disabled={isPending || celebrationLocked}
+                className="button-secondary"
+              >
+                {celebrationLocked ? "Celebrando" : "Semifinales ahora"}
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={() => onRevealGroup(nextDrawableGroupLabel)}
-              className="swiss-draw-button button-primary"
+              onClick={onAdvance}
+              disabled={isPending || celebrationLocked || (!roundComplete && !canAdvanceToTopCut)}
+              className="button-primary"
             >
-              Sortear {nextDrawableGroupLabel}
+              {celebrationLocked ? "Esperando animaciones" : advanceLabel}
             </button>
-          ) : (
-            <div />
-          )}
-
-          <div className="flex min-w-0 items-center justify-end gap-2 text-right">
-            <div className="flex flex-none flex-wrap justify-end gap-2">
-              <StageBadge label={`Ronda ${state.currentSwissRound} / ${state.swissRoundsPlanned}`} />
-              <StageBadge label={`Sync ${formatSyncTime(state.updatedAt)}`} />
-              <StageBadge label={state.config.title} />
-            </div>
-            <div className="hidden max-w-[min(38vw,560px)] lg:block">
-              <p className="truncate font-mono text-[9px] uppercase tracking-[0.18em] text-[rgba(242,247,238,0.46)]">
+            <div className="hidden max-w-[min(28vw,420px)] text-right xl:block">
+              <p className="truncate font-mono text-[8px] uppercase tracking-[0.16em] text-[rgba(242,247,238,0.42)]">
                 URL activa · {state.config.publicBaseUrl || "sin definir"}
               </p>
               <AdminCredit />
@@ -2691,16 +3534,26 @@ function SwissStageScreen({
           </div>
         </header>
 
-        <section className="mt-1.5 flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2.5 py-1.5">
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--accent)]">
-            Estado de la ronda
-          </span>
-          <div className="h-px w-8 bg-[rgba(244,247,239,0.12)]" />
-          <p className="text-xs text-[var(--muted)]">
-            <span className="font-semibold text-[var(--foreground)]">{pendingMatchesCount}</span>{" "}
-            pendientes
-          </p>
-        </section>
+        {topCutFooterItems.length > 0 ? (
+          <section className="mt-1.5 flex min-h-0 flex-wrap items-center justify-center gap-1.5 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] px-2.5 py-1.5">
+              {topCutFooterItems.map(({ team, topRank }) => (
+                <div
+                  key={`${team.id}-header-top-${topRank}`}
+                  className="flex min-w-[8.8rem] max-w-[12rem] items-center justify-between gap-2 rounded-[999px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1"
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <TeamFaces team={team} size="xxs" />
+                    <span className="min-w-0 truncate text-[11px] font-semibold text-[var(--foreground)]">
+                      {team.name}
+                    </span>
+                  </div>
+                  <span className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">
+                    Top {topRank}
+                  </span>
+                </div>
+              ))}
+          </section>
+        ) : null}
 
         <section ref={swissBoardMeasureRef} className="mt-1.5 min-h-0 overflow-hidden">
           {showFinalClassification ? (
@@ -3029,65 +3882,6 @@ function SwissStageScreen({
           )}
         </section>
 
-        <footer className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.86)] px-2.5 py-1.5">
-          <div className="flex flex-wrap gap-2">
-            <StageBadge label={`${currentRoundMatches.length} enfrentamientos`} />
-            <StageBadge
-              label={
-                hiddenGroupCount > 0
-                  ? `${hiddenGroupCount} tramos por sortear`
-                  : roundComplete
-                    ? "ronda cerrada"
-                    : "faltan resultados"
-              }
-            />
-          </div>
-
-          {topCutFooterItems.length > 0 ? (
-            <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-1.5 px-2">
-              {topCutFooterItems.map(({ team, topRank }) => (
-                <div
-                  key={`${team.id}-footer-top-${topRank}`}
-                  className="flex min-w-[8.8rem] max-w-[12rem] items-center justify-between gap-2 rounded-[999px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-2.5 py-1"
-                >
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <TeamFaces team={team} size="xxs" />
-                    <span className="min-w-0 truncate text-[11px] font-semibold text-[var(--foreground)]">
-                      {team.name}
-                    </span>
-                  </div>
-                  <span className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">
-                    Top {topRank}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={onSync} disabled={isSyncing} className="button-secondary">
-              {isSyncing ? "Sincronizando" : "Sincronizar"}
-            </button>
-            {structure.topCut > 0 ? (
-              <button
-                type="button"
-                onClick={onForceSemifinals}
-                disabled={isPending}
-                className="button-secondary"
-              >
-                Semifinales ahora
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={onAdvance}
-              disabled={isPending || (!roundComplete && !canAdvanceToTopCut)}
-              className="button-primary"
-            >
-              {advanceLabel}
-            </button>
-          </div>
-        </footer>
       </main>
       <FeedbackToast feedback={feedback} />
 
@@ -3177,6 +3971,7 @@ function PlayoffStageScreen({
   onBack,
   isPending,
   isSyncing,
+  celebrationLocked,
   feedback,
 }: {
   state: TournamentState;
@@ -3196,6 +3991,7 @@ function PlayoffStageScreen({
   onBack: () => void;
   isPending: boolean;
   isSyncing: boolean;
+  celebrationLocked: boolean;
   feedback: FeedbackState | null;
 }) {
   const pointsOnlyMode = isPointsOnlyMatchFormat(state.config);
@@ -3325,10 +4121,10 @@ function PlayoffStageScreen({
             <button
               type="button"
               onClick={onAdvance}
-              disabled={isPending || !roundComplete}
+              disabled={isPending || celebrationLocked || !roundComplete}
               className="button-primary"
             >
-              {advanceLabel}
+              {celebrationLocked ? "Esperando animaciones" : advanceLabel}
             </button>
           </div>
         </footer>
@@ -3531,12 +4327,29 @@ export function TournamentFlow({
   const [deletingParticipantId, setDeletingParticipantId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [celebrationQueue, setCelebrationQueue] = useState<CelebrationEvent[]>([]);
+  const [activeCelebration, setActiveCelebration] = useState<CelebrationEvent | null>(null);
+  const [topCutReveal, setTopCutReveal] = useState<TopCutRevealState | null>(null);
+  const [phaseTransitionReveal, setPhaseTransitionReveal] =
+    useState<PhaseTransitionRevealState | null>(null);
   const [isPending, startTransition] = useTransition();
+  const audio = useCelebrationAudio();
+  const previousStateRef = useRef<TournamentState | null>(null);
+  const latestStateRef = useRef<TournamentState>(initialState);
+  const seenCelebrationIdsRef = useRef<Set<string> | null>(null);
+  const activeCelebrationRef = useRef<CelebrationEvent | null>(null);
+  const celebrationQueueRef = useRef<CelebrationEvent[]>([]);
+  const applyTournamentStateRef = useRef<(nextState: TournamentState) => void>(() => undefined);
   const browserOrigin = useSyncExternalStore(
     subscribeToNothing,
     getBrowserOriginSnapshot,
     () => "",
   );
+  const celebrationLocked =
+    Boolean(activeCelebration) ||
+    celebrationQueue.length > 0 ||
+    Boolean(topCutReveal) ||
+    Boolean(phaseTransitionReveal);
 
   const canUseCurrentOrigin = Boolean(browserOrigin) && !isLocalhostLike(browserOrigin);
   const needsPublicUrlGate = !normalizeBaseUrlInput(state.config.publicBaseUrl);
@@ -3551,6 +4364,129 @@ export function TournamentFlow({
     () => describeTournamentPlan(plannedTeamCount, setupForm.format),
     [plannedTeamCount, setupForm.format],
   );
+
+  useEffect(() => {
+    if (!seenCelebrationIdsRef.current) {
+      const seenIds = readSeenCelebrationIds();
+      for (const id of getExistingCelebrationIds(initialState)) {
+        seenIds.add(id);
+      }
+      seenCelebrationIdsRef.current = seenIds;
+      previousStateRef.current = initialState;
+      latestStateRef.current = initialState;
+      writeSeenCelebrationIds(seenIds);
+    }
+  }, [initialState]);
+
+  useEffect(() => {
+    activeCelebrationRef.current = activeCelebration;
+  }, [activeCelebration]);
+
+  useEffect(() => {
+    celebrationQueueRef.current = celebrationQueue;
+  }, [celebrationQueue]);
+
+  useEffect(() => {
+    const unlockAudio = (): void => {
+      audio.unlock();
+    };
+
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    window.addEventListener("keydown", unlockAudio, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, [audio]);
+
+  function startCelebrationEvents(events: CelebrationEvent[], force = false): void {
+    if (events.length === 0) {
+      return;
+    }
+
+    const seenIds = seenCelebrationIdsRef.current ?? readSeenCelebrationIds();
+    seenCelebrationIdsRef.current = seenIds;
+    const activeEvent = activeCelebrationRef.current;
+    const queuedEvents = celebrationQueueRef.current;
+    const alreadyScheduled = new Set([
+      activeEvent?.id,
+      ...queuedEvents.map((entry) => entry.id),
+    ]);
+    const nextEvents: CelebrationEvent[] = [];
+
+    for (const event of events) {
+      if ((!force && seenIds.has(event.id)) || alreadyScheduled.has(event.id)) {
+        continue;
+      }
+
+      seenIds.add(event.id);
+      alreadyScheduled.add(event.id);
+      nextEvents.push(event);
+    }
+
+    if (nextEvents.length === 0) {
+      return;
+    }
+
+    writeSeenCelebrationIds(seenIds);
+
+    if (!activeEvent) {
+      const [firstEvent, ...restEvents] = nextEvents;
+      const nextQueue = [...queuedEvents, ...restEvents];
+      activeCelebrationRef.current = firstEvent;
+      celebrationQueueRef.current = nextQueue;
+      setActiveCelebration(firstEvent);
+      setCelebrationQueue(nextQueue);
+      return;
+    }
+
+    const nextQueue = [...queuedEvents, ...nextEvents];
+    celebrationQueueRef.current = nextQueue;
+    setCelebrationQueue(nextQueue);
+  }
+
+  function queueCelebrationEvent(event: CelebrationEvent, force = false): void {
+    startCelebrationEvents([event], force);
+  }
+
+  function queueCompletedMatchCelebration(nextState: TournamentState, matchId: string): void {
+    const match = nextState.matches.find((entry) => entry.id === matchId);
+    const event = match ? buildMatchClosedCelebrationEvent(nextState, match) : null;
+
+    if (!event) {
+      return;
+    }
+
+    queueCelebrationEvent(event, true);
+  }
+
+  function queueChampionCelebration(nextState: TournamentState): void {
+    const event = buildChampionCelebrationEvent(nextState);
+
+    if (!event) {
+      return;
+    }
+
+    queueCelebrationEvent(event, true);
+  }
+
+  function applyTournamentState(nextState: TournamentState): void {
+    const previousState = latestStateRef.current;
+    const seenIds = seenCelebrationIdsRef.current ?? readSeenCelebrationIds();
+    seenCelebrationIdsRef.current = seenIds;
+
+    const events = getNewCelebrationEvents(previousState, nextState, seenIds);
+    startCelebrationEvents(events);
+
+    previousStateRef.current = nextState;
+    latestStateRef.current = nextState;
+    setState(nextState);
+  }
+
+  useEffect(() => {
+    applyTournamentStateRef.current = applyTournamentState;
+  });
 
   async function pullTournamentState(silent = false): Promise<void> {
     if (!silent) {
@@ -3571,7 +4507,7 @@ export function TournamentFlow({
         );
       }
 
-      setState(nextState);
+      applyTournamentState(nextState);
       setSetupForm((current) => ({
         ...current,
         publicBaseUrl:
@@ -3597,7 +4533,7 @@ export function TournamentFlow({
           .then((response) => response.json())
           .then((payload: TournamentState | { error: string }) => {
             if (!("error" in payload)) {
-              setState(payload);
+              applyTournamentStateRef.current(payload);
             }
           })
           .catch(() => undefined);
@@ -3622,7 +4558,7 @@ export function TournamentFlow({
       throw new Error("error" in nextState ? nextState.error : "No se ha podido guardar.");
     }
 
-    setState(nextState);
+    applyTournamentState(nextState);
     setSetupForm(buildSetupForm(nextState));
     return nextState;
   }
@@ -3826,11 +4762,12 @@ export function TournamentFlow({
     );
   }
 
-  function handleAdvanceTournament(): void {
+  function executeAdvanceTournament(): void {
     runMutation(
       () => postAction({ action: "advancePhase" }),
       "Fase actualizada.",
       (nextState) => {
+        queueChampionCelebration(nextState);
         if (nextState.stage === "swiss") {
           setForcedScreen("swiss");
         } else if (nextState.stage === "semifinals" || nextState.stage === "final") {
@@ -3843,7 +4780,47 @@ export function TournamentFlow({
     );
   }
 
-  function handleForceSemifinalsFromCurrentStandings(): void {
+  function handleAdvanceTournament(): void {
+    if (celebrationLocked) {
+      setFeedback({
+        tone: "error",
+        text: "Espera a que terminen las animaciones antes de cambiar de fase.",
+      });
+      return;
+    }
+
+    const structure = getTournamentStructure(state.config.teamCount, state.config.format);
+    const semifinalRevealItems = getSemifinalRevealItems(state);
+    const explicitTopCutItems = getTopCutFooterItems(state);
+
+    if (
+      state.stage === "swiss" &&
+      structure.topCut > 0 &&
+      explicitTopCutItems.length >= structure.topCut &&
+      semifinalRevealItems.length >= structure.topCut
+    ) {
+      setTopCutReveal({ mode: "advance", items: semifinalRevealItems.slice(0, TOP_CUT) });
+      setFeedback(null);
+      return;
+    }
+
+    if (state.stage === "semifinals") {
+      const finalTeams = getCompletedSemifinalWinners(state);
+
+      if (finalTeams.length >= 2) {
+        setPhaseTransitionReveal({
+          mode: "semifinalsToFinal",
+          teams: finalTeams.slice(0, 2),
+        });
+        setFeedback(null);
+        return;
+      }
+    }
+
+    executeAdvanceTournament();
+  }
+
+  function executeForceSemifinalsFromCurrentStandings(): void {
     runMutation(
       () => postAction({ action: "forceSemifinalsFromCurrentStandings" }),
       "Semifinales generadas con el Top 4 provisional.",
@@ -3852,6 +4829,35 @@ export function TournamentFlow({
         setActiveMatchId(null);
       },
     );
+  }
+
+  function handleForceSemifinalsFromCurrentStandings(): void {
+    if (celebrationLocked) {
+      setFeedback({
+        tone: "error",
+        text: "Espera a que terminen las animaciones antes de cambiar de fase.",
+      });
+      return;
+    }
+
+    let projectedSemifinalState: TournamentState;
+
+    try {
+      projectedSemifinalState = forceSemifinalsFromCurrentStandings(state);
+    } catch (error) {
+      setFeedback({ tone: "error", text: (error as Error).message });
+      return;
+    }
+
+    const semifinalRevealItems = getSemifinalRevealItems(projectedSemifinalState);
+
+    if (semifinalRevealItems.length >= TOP_CUT) {
+      setTopCutReveal({ mode: "force", items: semifinalRevealItems.slice(0, TOP_CUT) });
+      setFeedback(null);
+      return;
+    }
+
+    executeForceSemifinalsFromCurrentStandings();
   }
 
   function handleSaveMatch(match: Match): void {
@@ -3871,19 +4877,54 @@ export function TournamentFlow({
     };
 
     runMutation(
-      () =>
-        postAction({
+      async () => {
+        const nextState = await postAction({
           action: "reportMatch",
           payload: {
             matchId: match.id,
             score: payload,
           },
-        }),
+        });
+
+        if (match.stage === "final" && nextState.stage === "final") {
+          return postAction({ action: "advancePhase" });
+        }
+
+        return nextState;
+      },
       "Resultado guardado.",
-      () => {
+      (nextState) => {
+        queueCompletedMatchCelebration(nextState, match.id);
+        if (match.stage === "final") {
+          queueChampionCelebration(nextState);
+        }
         setActiveMatchId(null);
       },
     );
+  }
+
+  function handleCelebrationDone(): void {
+    const [nextCelebration, ...remainingCelebrations] = celebrationQueueRef.current;
+    celebrationQueueRef.current = remainingCelebrations;
+    activeCelebrationRef.current = nextCelebration ?? null;
+    setCelebrationQueue(remainingCelebrations);
+    setActiveCelebration(nextCelebration ?? null);
+  }
+
+  function handleTopCutRevealDone(): void {
+    const mode = topCutReveal?.mode;
+    setTopCutReveal(null);
+
+    if (mode === "advance") {
+      executeAdvanceTournament();
+    } else if (mode === "force") {
+      executeForceSemifinalsFromCurrentStandings();
+    }
+  }
+
+  function handlePhaseTransitionDone(): void {
+    setPhaseTransitionReveal(null);
+    executeAdvanceTournament();
   }
 
   function handleRevealSwissGroup(bracketLabel: string): void {
@@ -3951,6 +4992,39 @@ export function TournamentFlow({
 
     return "Continuar fase actual";
   }, [existingStateDetail, hasExistingProgress, state.stage]);
+  const celebrationLayer = (
+    <>
+      <CelebrationAudioToggle audio={audio} />
+      {activeCelebration?.kind === "matchClosed" ? (
+        <MatchCelebrationOverlay
+          event={activeCelebration}
+          audio={audio}
+          onDone={handleCelebrationDone}
+        />
+      ) : null}
+      {activeCelebration?.kind === "champion" ? (
+        <ChampionCelebrationOverlay
+          event={activeCelebration}
+          audio={audio}
+          onDone={handleCelebrationDone}
+        />
+      ) : null}
+      {topCutReveal ? (
+        <TopCutRevealOverlay
+          reveal={topCutReveal}
+          audio={audio}
+          onDone={handleTopCutRevealDone}
+        />
+      ) : null}
+      {phaseTransitionReveal ? (
+        <PhaseTransitionOverlay
+          reveal={phaseTransitionReveal}
+          audio={audio}
+          onDone={handlePhaseTransitionDone}
+        />
+      ) : null}
+    </>
+  );
 
   const stageScreen: Screen =
     state.stage === "swiss"
@@ -3972,88 +5046,156 @@ export function TournamentFlow({
 
   if (screen === "url") {
     return (
-      <PublicUrlScreen
-        value={setupForm.publicBaseUrl}
-        onChange={(value) =>
-          setSetupForm((current) => ({ ...current, publicBaseUrl: value }))
-        }
-        onSubmit={handleSavePublicBaseUrl}
-        onUseCurrentOrigin={() =>
-          setSetupForm((current) => ({
-            ...current,
-            publicBaseUrl: browserOrigin,
-          }))
-        }
-        canUseCurrentOrigin={canUseCurrentOrigin}
-        browserOrigin={browserOrigin}
-        networkBaseUrls={networkBaseUrls}
-        isPending={isPending}
-        feedback={feedback}
-      />
+      <>
+        <PublicUrlScreen
+          value={setupForm.publicBaseUrl}
+          onChange={(value) =>
+            setSetupForm((current) => ({ ...current, publicBaseUrl: value }))
+          }
+          onSubmit={handleSavePublicBaseUrl}
+          onUseCurrentOrigin={() =>
+            setSetupForm((current) => ({
+              ...current,
+              publicBaseUrl: browserOrigin,
+            }))
+          }
+          canUseCurrentOrigin={canUseCurrentOrigin}
+          browserOrigin={browserOrigin}
+          networkBaseUrls={networkBaseUrls}
+          isPending={isPending}
+          feedback={feedback}
+        />
+        {celebrationLayer}
+      </>
     );
   }
 
   if (screen === "setup") {
     return (
-      <TournamentSetupScreen
-        form={setupForm}
-        planSummary={planSummary}
-        onChange={(patch) =>
-          setSetupForm((current) => ({
-            ...current,
-            ...patch,
-          }))
-        }
-        onSubmit={handleCreateTournament}
-        onBackToUrl={() => {
-          setForcedScreen("url");
-          setFeedback(null);
-        }}
-        onContinue={
-          hasExistingProgress
-            ? () => {
-                setForcedScreen(stageContinuationScreen(state.stage));
-                setFeedback(null);
-              }
-            : undefined
-        }
-        continueLabel={continueLabel}
-        currentStateDetail={existingStateDetail}
-        isPending={isPending}
-        publicBaseUrl={state.config.publicBaseUrl}
-        feedback={feedback}
-      />
+      <>
+        <TournamentSetupScreen
+          form={setupForm}
+          planSummary={planSummary}
+          onChange={(patch) =>
+            setSetupForm((current) => ({
+              ...current,
+              ...patch,
+            }))
+          }
+          onSubmit={handleCreateTournament}
+          onBackToUrl={() => {
+            setForcedScreen("url");
+            setFeedback(null);
+          }}
+          onContinue={
+            hasExistingProgress
+              ? () => {
+                  setForcedScreen(stageContinuationScreen(state.stage));
+                  setFeedback(null);
+                }
+              : undefined
+          }
+          continueLabel={continueLabel}
+          currentStateDetail={existingStateDetail}
+          isPending={isPending}
+          publicBaseUrl={state.config.publicBaseUrl}
+          feedback={feedback}
+        />
+        {celebrationLayer}
+      </>
     );
   }
 
   if (screen === "registration") {
     return (
-      <RegistrationStageScreen
-        state={state}
-        registrationUrl={registrationUrl}
-        onBack={() => {
-          setForcedScreen("setup");
-          setFeedback(null);
-        }}
-        onAddBotParticipant={handleAddBotParticipant}
-        onRenameParticipant={handleRenameParticipant}
-        onDeleteParticipant={handleDeleteParticipant}
-        renamingParticipantId={renamingParticipantId}
-        deletingParticipantId={deletingParticipantId}
-        onCreateRandomTeams={handleCreateRandomTeams}
-        onPrepareManualTeams={handlePrepareManualTeams}
-        onAssignParticipant={handleAssignParticipant}
-        onConfirmManualTeam={handleConfirmManualTeam}
-        onStartTournament={handleStartTournament}
-        isPending={isPending}
-        feedback={feedback}
-      />
+      <>
+        <RegistrationStageScreen
+          state={state}
+          registrationUrl={registrationUrl}
+          onBack={() => {
+            setForcedScreen("setup");
+            setFeedback(null);
+          }}
+          onAddBotParticipant={handleAddBotParticipant}
+          onRenameParticipant={handleRenameParticipant}
+          onDeleteParticipant={handleDeleteParticipant}
+          renamingParticipantId={renamingParticipantId}
+          deletingParticipantId={deletingParticipantId}
+          onCreateRandomTeams={handleCreateRandomTeams}
+          onPrepareManualTeams={handlePrepareManualTeams}
+          onAssignParticipant={handleAssignParticipant}
+          onConfirmManualTeam={handleConfirmManualTeam}
+          onStartTournament={handleStartTournament}
+          isPending={isPending}
+          feedback={feedback}
+        />
+        {celebrationLayer}
+      </>
     );
   }
 
   if (screen === "swiss") {
     return (
-      <SwissStageScreen
+      <>
+        <SwissStageScreen
+          state={state}
+          resultDrafts={resultDrafts}
+          onResultDraftChange={(matchId, side, field, value) => {
+            const match = state.matches.find((entry) => entry.id === matchId);
+            if (!match) {
+              return;
+            }
+
+            setResultDrafts((current) => ({
+              ...current,
+              [matchId]: {
+                ...(current[matchId] ?? buildResultDraft(match)),
+                [side]: {
+                  ...(current[matchId]?.[side] ?? {
+                    vacas: "0",
+                    games: "0",
+                    points: "0",
+                  }),
+                  [field]: value,
+                },
+              },
+            }));
+          }}
+          onSaveMatch={handleSaveMatch}
+          onRevealGroup={handleRevealSwissGroup}
+          onOpenMatch={(matchId) => setActiveMatchId(matchId)}
+          onCloseMatch={() => setActiveMatchId(null)}
+          activeMatchId={activeMatchId}
+          onAdvance={handleAdvanceTournament}
+          onForceSemifinals={handleForceSemifinalsFromCurrentStandings}
+          onBack={handleBackFromSwiss}
+          isPending={isPending}
+          celebrationLocked={celebrationLocked}
+          feedback={feedback}
+        />
+        {celebrationLayer}
+      </>
+    );
+  }
+
+  if (state.stage === "completed") {
+    return (
+      <>
+        <CompletedTournamentScreen
+          state={state}
+          onBack={() => {
+            setForcedScreen("setup");
+            setFeedback(null);
+          }}
+        />
+        {celebrationLayer}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PlayoffStageScreen
         state={state}
         resultDrafts={resultDrafts}
         onResultDraftChange={(matchId, side, field, value) => {
@@ -4078,71 +5220,21 @@ export function TournamentFlow({
           }));
         }}
         onSaveMatch={handleSaveMatch}
-        onRevealGroup={handleRevealSwissGroup}
         onOpenMatch={(matchId) => setActiveMatchId(matchId)}
         onCloseMatch={() => setActiveMatchId(null)}
         activeMatchId={activeMatchId}
         onAdvance={handleAdvanceTournament}
-        onForceSemifinals={handleForceSemifinalsFromCurrentStandings}
         onSync={() => void pullTournamentState()}
-        onBack={handleBackFromSwiss}
-        isPending={isPending}
-        isSyncing={isSyncing}
-        feedback={feedback}
-      />
-    );
-  }
-
-  if (state.stage === "completed") {
-    return (
-      <CompletedTournamentScreen
-        state={state}
         onBack={() => {
           setForcedScreen("setup");
           setFeedback(null);
         }}
+        isPending={isPending}
+        isSyncing={isSyncing}
+        celebrationLocked={celebrationLocked}
+        feedback={feedback}
       />
-    );
-  }
-
-  return (
-    <PlayoffStageScreen
-      state={state}
-      resultDrafts={resultDrafts}
-      onResultDraftChange={(matchId, side, field, value) => {
-        const match = state.matches.find((entry) => entry.id === matchId);
-        if (!match) {
-          return;
-        }
-
-        setResultDrafts((current) => ({
-          ...current,
-          [matchId]: {
-            ...(current[matchId] ?? buildResultDraft(match)),
-            [side]: {
-              ...(current[matchId]?.[side] ?? {
-                vacas: "0",
-                games: "0",
-                points: "0",
-              }),
-              [field]: value,
-            },
-          },
-        }));
-      }}
-      onSaveMatch={handleSaveMatch}
-      onOpenMatch={(matchId) => setActiveMatchId(matchId)}
-      onCloseMatch={() => setActiveMatchId(null)}
-      activeMatchId={activeMatchId}
-      onAdvance={handleAdvanceTournament}
-      onSync={() => void pullTournamentState()}
-      onBack={() => {
-        setForcedScreen("setup");
-        setFeedback(null);
-      }}
-      isPending={isPending}
-      isSyncing={isSyncing}
-      feedback={feedback}
-    />
+      {celebrationLayer}
+    </>
   );
 }

@@ -980,7 +980,9 @@ export function refreshTournamentState(state: TournamentState): TournamentState 
     cloned.currentSwissRound,
   );
   cloned.topCut = structure.topCut;
-  cloned.matches = normalizeGeneratedSwissMarkers(cloned.matches);
+  cloned.matches = normalizePrematureTopCutMarkers(
+    normalizeGeneratedSwissMarkers(cloned.matches),
+  );
   const synced = syncParticipantsAndTeams(cloned);
   const baseTeams = synced.teams.map((team) => ({
     ...team,
@@ -1644,6 +1646,36 @@ function nextTopRank(matches: Match[]): 1 | 2 | 3 | 4 | null {
   return null;
 }
 
+function hasUndefeatedQualification(matches: Match[]): boolean {
+  return matches.some((match) => {
+    if (match.marker !== "qualification" || !match.topRank) {
+      return false;
+    }
+
+    return parseRecordLabel(match.bracketLabel).losses === 0;
+  });
+}
+
+function normalizePrematureTopCutMarkers(matches: Match[]): Match[] {
+  const normalized: Match[] = [];
+
+  for (const match of matches) {
+    if (match.stage !== "swiss" || match.marker !== "qualification") {
+      normalized.push(match);
+      continue;
+    }
+
+    const { losses } = parseRecordLabel(match.bracketLabel);
+    const hasTopOne = hasUndefeatedQualification(normalized);
+
+    if (losses === 0 || hasTopOne) {
+      normalized.push(match);
+    }
+  }
+
+  return normalized;
+}
+
 function pushQualificationMarker(
   matches: Match[],
   contextMatches: Match[],
@@ -1779,9 +1811,10 @@ function createSwissPairings(
     const { losses } = parseRecordLabel(record);
     const nextRank = nextTopRank([...state.matches, ...matches]);
     const remainingTopSlots = nextRank ? TOP_CUT - nextRank + 1 : 0;
+    const hasTopOne = hasUndefeatedQualification([...state.matches, ...matches]);
 
     if (group.length === 1) {
-      if (losses === 0 || losses === 1) {
+      if (losses === 0 || (losses === 1 && hasTopOne)) {
         const next = pushQualificationMarker(
           matches,
           [...state.matches, ...matches],
@@ -1807,7 +1840,7 @@ function createSwissPairings(
       continue;
     }
 
-    if (losses === 1 && group.length <= 3 && group.length !== 2) {
+    if (losses === 1 && hasTopOne && group.length <= 3 && group.length !== 2) {
       for (const team of [...group].sort(topCutPointsComparator).slice(0, remainingTopSlots)) {
         const next = pushQualificationMarker(
           matches,
@@ -1910,7 +1943,8 @@ function addTopCutProgressionMarkers(state: TournamentState): TournamentState {
 
     const nextRank = nextTopRank(matches);
     const remainingSlots = nextRank ? TOP_CUT - nextRank + 1 : 0;
-    if (remainingSlots === 2 && winner && loser) {
+    const hasTopOne = hasUndefeatedQualification(matches);
+    if (hasTopOne && remainingSlots === 2 && winner && loser) {
       for (const team of [winner, loser]) {
         const next = pushQualificationMarker(
           matches,
@@ -1923,7 +1957,7 @@ function addTopCutProgressionMarkers(state: TournamentState): TournamentState {
         matches = next.matches;
         table = next.table;
       }
-    } else if (losses === 1 && winner) {
+    } else if (hasTopOne && losses === 1 && winner) {
       const next = pushQualificationMarker(
         matches,
         matches,

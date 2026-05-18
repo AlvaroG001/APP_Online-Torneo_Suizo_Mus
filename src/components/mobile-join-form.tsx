@@ -356,18 +356,39 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
 
   useEffect(() => {
     let active = true;
-    const nextDeviceId = resolveDeviceId();
-    setDeviceId(nextDeviceId);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 4500);
 
-    void fetch("/api/tournament", { cache: "no-store" })
+    try {
+      const nextDeviceId = resolveDeviceId();
+      setDeviceId(nextDeviceId);
+    } catch {
+      const fallbackDeviceId = createDeviceId();
+      setDeviceId(fallbackDeviceId);
+      try {
+        persistDeviceId(fallbackDeviceId);
+      } catch {
+        // Si el navegador bloquea almacenamiento, el registro seguirá funcionando en memoria.
+      }
+    }
+
+    void fetch("/api/tournament", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
       .then((response) => response.json())
       .then((payload: TournamentState | { error: string }) => {
         if (active && !("error" in payload)) {
           setState(payload);
         }
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (active) {
+          setFeedback("No se ha podido sincronizar todavía. Puedes registrarte y se reintentará solo.");
+        }
+      })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         if (active) {
           setDeviceIdReady(true);
         }
@@ -375,6 +396,8 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
 
     return () => {
       active = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
   }, []);
 

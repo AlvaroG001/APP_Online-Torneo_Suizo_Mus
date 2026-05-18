@@ -424,6 +424,30 @@ img {
   letter-spacing: 0.16em;
 }
 
+.registration-header-logo {
+  display: flex;
+  align-self: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.registration-header-logo img {
+  width: min(16vw, 10rem);
+  min-width: 5.5rem;
+  max-height: clamp(4.5rem, 12vh, 7.5rem);
+  object-fit: contain;
+  opacity: 1;
+  filter: drop-shadow(0 18px 34px rgba(124, 255, 79, 0.16));
+}
+
+.admin-header--with-logo {
+  min-height: clamp(8.5rem, 18vh, 13rem);
+}
+
+.admin-header--with-logo > :first-child {
+  align-self: center;
+}
+
 .swiss-box-header {
   min-height: clamp(2rem, 3.5vh, 2.45rem);
 }
@@ -510,13 +534,622 @@ img {
 .tournament-watermark--swiss .tournament-watermark__logo {
   width: min(42vw, 36rem);
   max-height: 46vh;
-  opacity: 0.1;
+  opacity: 0.18;
 }
 
 .tournament-watermark--mobile .tournament-watermark__logo {
   width: min(78vw, 24rem);
   max-height: 42vh;
   opacity: 0.08;
+}
+
+.celebration-audio-toggle {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 9996;
+  min-height: 2rem;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  background: rgba(11, 16, 12, 0.82);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  padding: 0.45rem 0.75rem;
+  text-transform: uppercase;
+  transition:
+    border-color 160ms ease,
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.celebration-audio-toggle:hover {
+  border-color: var(--accent-border);
+  background: rgba(124, 255, 79, 0.12);
+  color: var(--foreground);
+}
+
+.celebration-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9990;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: clamp(1rem, 3vw, 2.5rem);
+  background:
+    radial-gradient(circle at 50% 44%, rgba(124, 255, 79, 0.26), transparent 38%),
+    radial-gradient(circle at 50% 50%, rgba(248, 216, 90, 0.13), transparent 24%),
+    rgba(2, 4, 3, 0.94);
+  backdrop-filter: blur(14px);
+}
+
+.celebration-card {
+  position: relative;
+  z-index: 2;
+  width: min(92vw, 78rem);
+  border: 1px solid var(--accent-border);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(124, 255, 79, 0.12), transparent 34%),
+    rgba(11, 16, 12, 0.96);
+  box-shadow:
+    0 0 0 1px rgba(124, 255, 79, 0.08) inset,
+    0 28px 140px rgba(0, 0, 0, 0.56),
+    0 0 110px rgba(124, 255, 79, 0.18);
+  padding: clamp(1rem, 2vw, 1.6rem);
+  animation: celebration-card-pop 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.celebration-card--match {
+  width: min(96vw, 92rem);
+  min-height: min(76vh, 50rem);
+  animation: celebration-match-table-in 740ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.celebration-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid rgba(242, 247, 238, 0.12);
+  padding-bottom: 0.85rem;
+}
+
+.celebration-card__header p,
+.celebration-card__header span {
+  font-family: var(--font-mono);
+  font-size: clamp(0.62rem, 0.9vw, 0.78rem);
+  font-weight: 900;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.celebration-card__header p {
+  color: var(--accent);
+}
+
+.celebration-card__header span {
+  color: var(--muted);
+}
+
+.celebration-result-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(8rem, 12vw, 11rem) minmax(0, 1fr);
+  gap: clamp(1.4rem, 3vw, 3rem);
+  align-items: stretch;
+  margin-top: 1.25rem;
+}
+
+.celebration-match-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(0.25rem, 0.7vw, 0.55rem);
+  padding-top: clamp(0.8rem, 1.6vw, 1.35rem);
+  text-align: center;
+}
+
+.celebration-match-title span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: clamp(0.64rem, 0.9vw, 0.8rem);
+  font-weight: 900;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.celebration-match-title strong {
+  color: var(--foreground);
+  font-size: clamp(1.9rem, 4vw, 3.6rem);
+  font-weight: 950;
+  line-height: 0.95;
+}
+
+.celebration-team-panel {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  border-radius: 16px;
+  background: rgba(18, 24, 19, 0.94);
+  padding: clamp(1rem, 2vw, 1.4rem);
+  transform-origin: center;
+  animation: celebration-team-rise 680ms cubic-bezier(0.16, 1, 0.3, 1) 160ms both;
+}
+
+.celebration-team-panel--winner {
+  border-color: rgba(248, 216, 90, 0.78);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(248, 216, 90, 0.18), transparent 34%),
+    rgba(18, 24, 19, 0.98);
+  box-shadow: 0 0 55px rgba(248, 216, 90, 0.14);
+  animation:
+    celebration-winner-pop 860ms cubic-bezier(0.16, 1, 0.3, 1) 180ms both,
+    celebration-winner-glow 1700ms ease-in-out 900ms infinite alternate;
+}
+
+.celebration-team-panel--loser {
+  border-color: rgba(255, 75, 86, 0.52);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 75, 86, 0.1), transparent 36%),
+    rgba(18, 24, 19, 0.96);
+}
+
+.celebration-team-portraits {
+  display: flex;
+  justify-content: center;
+  gap: clamp(0.75rem, 1.6vw, 1.25rem);
+  margin-top: clamp(1.2rem, 2vw, 1.8rem);
+}
+
+.celebration-team-portrait {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.celebration-team-portrait__photo {
+  display: grid;
+  width: clamp(6.4rem, 10.5vw, 9.5rem);
+  height: clamp(6.4rem, 10.5vw, 9.5rem);
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid rgba(248, 216, 90, 0.82);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(248, 216, 90, 0.18), transparent 56%),
+    var(--surface-raised);
+  color: var(--foreground);
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  font-weight: 950;
+  box-shadow:
+    0 0 0 8px rgba(248, 216, 90, 0.08),
+    0 18px 42px rgba(0, 0, 0, 0.38),
+    0 0 40px rgba(248, 216, 90, 0.18);
+}
+
+.celebration-team-portraits--loser .celebration-team-portrait__photo {
+  border-color: rgba(255, 75, 86, 0.78);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 75, 86, 0.14), transparent 56%),
+    var(--surface-raised);
+  box-shadow:
+    0 0 0 8px rgba(255, 75, 86, 0.06),
+    0 18px 42px rgba(0, 0, 0, 0.38),
+    0 0 38px rgba(255, 75, 86, 0.12);
+}
+
+.celebration-team-portrait__photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.celebration-team-portrait p {
+  max-width: clamp(7rem, 13vw, 11rem);
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: clamp(0.8rem, 1vw, 1rem);
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.celebration-player-crown {
+  position: absolute;
+  top: clamp(-2.1rem, -2.5vw, -1.45rem);
+  left: 50%;
+  z-index: 2;
+  width: clamp(2.6rem, 4.2vw, 4rem);
+  color: #f8d85a;
+  filter: drop-shadow(0 10px 18px rgba(248, 216, 90, 0.36));
+  transform: translateX(-50%);
+  animation: crown-bounce 760ms cubic-bezier(0.16, 1, 0.3, 1) 420ms both;
+}
+
+.celebration-score {
+  display: inline-grid;
+  min-width: clamp(4.5rem, 7vw, 6rem);
+  min-height: clamp(3.8rem, 6vw, 5rem);
+  place-items: center;
+  border: 1px solid var(--accent-border);
+  border-radius: 14px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: clamp(2rem, 4vw, 3.8rem);
+  font-weight: 950;
+  line-height: 1;
+}
+
+.celebration-versus {
+  display: flex;
+  min-width: clamp(8rem, 12vw, 11rem);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  text-align: center;
+}
+
+.celebration-versus strong {
+  display: grid;
+  width: clamp(4.5rem, 7vw, 6rem);
+  height: clamp(4.5rem, 7vw, 6rem);
+  place-items: center;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: clamp(1rem, 2vw, 1.5rem);
+  letter-spacing: 0;
+  line-height: 1;
+  box-shadow: 0 0 48px rgba(124, 255, 79, 0.24);
+}
+
+.celebration-versus span {
+  max-width: 16rem;
+  color: var(--muted);
+  font-size: clamp(0.78rem, 1vw, 0.92rem);
+  line-height: 1.35;
+}
+
+.celebration-confetti {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.celebration-confetti__piece {
+  position: absolute;
+  top: -8vh;
+  left: var(--confetti-x);
+  width: 0.45rem;
+  height: 0.9rem;
+  border-radius: 2px;
+  background: var(--confetti-color);
+  opacity: 0;
+  animation: confetti-fall var(--confetti-duration) ease-in var(--confetti-delay) forwards;
+}
+
+.celebration-card--topcut {
+  width: min(96vw, 88rem);
+  min-height: min(74vh, 48rem);
+}
+
+.topcut-reveal-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(0.65rem, 1.5vw, 1rem);
+  align-items: center;
+  min-height: clamp(18rem, 38vh, 28rem);
+  margin-top: 1.1rem;
+  perspective: 1400px;
+}
+
+.topcut-reveal-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  border-radius: 16px;
+  background: rgba(18, 24, 19, 0.96);
+  padding: clamp(0.9rem, 1.6vw, 1.3rem);
+  opacity: 0;
+  transform: translateY(20px) scale(0.96);
+  animation:
+    topcut-card-reveal 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    topcut-card-shuffle 3400ms ease-in-out 2100ms,
+    topcut-card-settle 720ms cubic-bezier(0.16, 1, 0.3, 1) 5700ms both;
+}
+
+.topcut-reveal-card--fly-1 {
+  --topcut-fly-x: -54%;
+  --topcut-fly-y: 10%;
+}
+
+.topcut-reveal-card--fly-2 {
+  --topcut-fly-x: -18%;
+  --topcut-fly-y: 16%;
+}
+
+.topcut-reveal-card--fly-3 {
+  --topcut-fly-x: 18%;
+  --topcut-fly-y: 16%;
+}
+
+.topcut-reveal-card--fly-4 {
+  --topcut-fly-x: 54%;
+  --topcut-fly-y: 10%;
+}
+
+.topcut-reveal-card--rank-1 {
+  border-color: rgba(248, 216, 90, 0.78);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(248, 216, 90, 0.18), transparent 34%),
+    rgba(18, 24, 19, 0.98);
+}
+
+.topcut-reveal-card p,
+.topcut-reveal-card span,
+.topcut-slot span {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.topcut-reveal-card p {
+  color: var(--accent);
+}
+
+.topcut-reveal-card h3 {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: clamp(1rem, 1.6vw, 1.45rem);
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topcut-reveal-card span {
+  color: var(--muted);
+}
+
+.topcut-reveal-card__crown {
+  position: absolute;
+  right: 0.65rem;
+  top: 0.55rem;
+  width: 2.4rem;
+  color: #f8d85a;
+}
+
+.topcut-slots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+  opacity: 0;
+  transform: translateY(14px);
+  transform: translateY(24px) scale(0.96);
+  animation: topcut-slots-in 740ms cubic-bezier(0.16, 1, 0.3, 1) 6500ms forwards;
+}
+
+.topcut-slot {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.75rem;
+  align-items: center;
+  border: 1px solid var(--accent-border);
+  border-radius: 14px;
+  background: var(--accent-soft);
+  padding: 0.85rem 1rem;
+  text-align: center;
+  box-shadow: 0 0 48px rgba(124, 255, 79, 0.12);
+}
+
+.topcut-slot span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.topcut-slot strong {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: clamp(1rem, 1.5vw, 1.35rem);
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topcut-slot em {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+}
+
+.celebration-card--phase {
+  width: min(92vw, 76rem);
+  min-height: min(68vh, 42rem);
+}
+
+.phase-transition-track {
+  position: relative;
+  display: grid;
+  min-height: clamp(17rem, 36vh, 26rem);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(1rem, 3vw, 3rem);
+  align-items: center;
+  margin-top: clamp(1.2rem, 2vw, 1.8rem);
+  perspective: 1400px;
+}
+
+.phase-transition-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(124, 255, 79, 0.18), transparent 36%),
+    rgba(18, 24, 19, 0.97);
+  padding: clamp(1rem, 2vw, 1.6rem);
+  opacity: 0;
+  box-shadow: 0 0 70px rgba(124, 255, 79, 0.12);
+  animation:
+    phase-card-enter 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    phase-card-fly 3200ms cubic-bezier(0.64, 0, 0.2, 1) 1350ms forwards,
+    celebration-winner-glow 1800ms ease-in-out 4700ms infinite alternate;
+}
+
+.topcut-reveal-card:nth-child(1) {
+  --topcut-fly-x: -34%;
+  --topcut-fly-y: 8%;
+}
+
+.topcut-reveal-card:nth-child(2) {
+  --topcut-fly-x: 34%;
+  --topcut-fly-y: 8%;
+}
+
+.topcut-reveal-card:nth-child(3) {
+  --topcut-fly-x: -34%;
+  --topcut-fly-y: 18%;
+}
+
+.topcut-reveal-card:nth-child(4) {
+  --topcut-fly-x: 34%;
+  --topcut-fly-y: 18%;
+}
+
+.phase-transition-card--1 {
+  --phase-start-x: -34vw;
+  --phase-end-x: 8%;
+  --phase-rotate: -5deg;
+}
+
+.phase-transition-card--2 {
+  --phase-start-x: 34vw;
+  --phase-end-x: -8%;
+  --phase-rotate: 5deg;
+  animation-delay: 180ms, 1530ms, 4880ms;
+}
+
+.phase-transition-card p,
+.phase-transition-card span,
+.phase-final-slot {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.phase-transition-card p {
+  color: var(--accent);
+}
+
+.phase-transition-card h3 {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: clamp(1.4rem, 2.6vw, 2.4rem);
+  font-weight: 950;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phase-transition-card span {
+  color: var(--muted);
+}
+
+.phase-final-slot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: clamp(0.8rem, 2vw, 1.5rem);
+  align-items: center;
+  margin-top: 1rem;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  padding: 0.8rem 1rem;
+  opacity: 0;
+  text-align: center;
+  animation: topcut-slots-in 720ms cubic-bezier(0.16, 1, 0.3, 1) 5400ms forwards;
+}
+
+.phase-final-slot strong {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phase-final-slot em {
+  color: var(--accent);
+  font-style: normal;
+}
+
+.celebration-card--champion {
+  display: flex;
+  min-height: min(72vh, 44rem);
+  width: min(88vw, 58rem);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  animation:
+    celebration-champion-in 920ms cubic-bezier(0.16, 1, 0.3, 1) both,
+    celebration-winner-glow 1900ms ease-in-out 1050ms infinite alternate;
+}
+
+.champion-trophy {
+  position: absolute;
+  inset: auto auto 2rem 50%;
+  width: min(42vw, 22rem);
+  height: min(42vw, 22rem);
+  transform: translateX(-50%);
+  opacity: 0.11;
+}
+
+.champion-trophy__cup {
+  position: absolute;
+  inset: 10% 18% 36%;
+  border-radius: 0 0 46% 46%;
+  background: linear-gradient(135deg, #fff7b3, #f8d85a 52%, #a97712);
+}
+
+.champion-trophy__stem {
+  position: absolute;
+  inset: 58% 43% 22%;
+  background: linear-gradient(90deg, #a97712, #f8d85a, #a97712);
+}
+
+.champion-trophy__base {
+  position: absolute;
+  inset: 76% 26% 14%;
+  border-radius: 999px 999px 12px 12px;
+  background: linear-gradient(90deg, #a97712, #f8d85a, #a97712);
 }
 
 @media (max-height: 820px) {
@@ -618,6 +1251,249 @@ img {
   to {
     opacity: 0;
     transform: scale(1.02);
+  }
+}
+
+@keyframes celebration-card-pop {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.9);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes celebration-match-table-in {
+  0% {
+    opacity: 0;
+    transform: translateY(34px) scale(0.42) rotateX(8deg);
+  }
+
+  58% {
+    opacity: 1;
+    transform: translateY(-8px) scale(1.035) rotateX(0deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotateX(0deg);
+  }
+}
+
+@keyframes celebration-team-rise {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes celebration-winner-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(30px) scale(0.8);
+  }
+
+  62% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1.06);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes celebration-winner-glow {
+  from {
+    box-shadow:
+      0 0 0 1px rgba(248, 216, 90, 0.12) inset,
+      0 0 44px rgba(248, 216, 90, 0.14);
+  }
+
+  to {
+    box-shadow:
+      0 0 0 1px rgba(248, 216, 90, 0.3) inset,
+      0 0 96px rgba(248, 216, 90, 0.28);
+  }
+}
+
+@keyframes crown-bounce {
+  0% {
+    opacity: 0;
+    transform: translateY(-18px) rotate(-8deg) scale(0.82);
+  }
+
+  62% {
+    opacity: 1;
+    transform: translateY(3px) rotate(4deg) scale(1.08);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -8vh, 0) rotate(0deg);
+  }
+
+  12% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--confetti-drift), 112vh, 0)
+      rotate(var(--confetti-rotation));
+  }
+}
+
+@keyframes topcut-card-reveal {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes topcut-card-shuffle {
+  0% {
+    transform: translate3d(0, 0, 0) rotateY(0deg) rotate(0deg) scale(1);
+  }
+
+  16% {
+    transform: translate3d(42%, -12px, 0) rotateY(26deg) rotate(2deg) scale(1.04);
+  }
+
+  34% {
+    transform: translate3d(-34%, 10px, 0) rotateY(-22deg) rotate(-2deg) scale(0.98);
+  }
+
+  52% {
+    transform: translate3d(28%, -8px, 0) rotateY(18deg) rotate(1deg) scale(1.02);
+  }
+
+  72% {
+    transform: translate3d(-18%, 8px, 0) rotateY(-14deg) rotate(-1deg) scale(1);
+  }
+
+  100% {
+    transform: translate3d(0, 0, 0) rotateY(0deg) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes topcut-card-settle {
+  0% {
+    filter: brightness(1);
+  }
+
+  45% {
+    filter: brightness(1.65);
+    transform: translate3d(var(--topcut-fly-x, 0), calc(var(--topcut-fly-y, 0px) - 18px), 0)
+      rotate(2deg)
+      scale(1.04);
+  }
+
+  100% {
+    filter: brightness(1);
+    transform: translate3d(var(--topcut-fly-x, 0), var(--topcut-fly-y, 0), 0)
+      rotate(0deg)
+      scale(0.96);
+  }
+}
+
+@keyframes topcut-slots-in {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes celebration-champion-in {
+  0% {
+    opacity: 0;
+    transform: translateY(36px) scale(0.5) rotateX(10deg);
+  }
+
+  55% {
+    opacity: 1;
+    transform: translateY(-10px) scale(1.06) rotateX(0deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotateX(0deg);
+  }
+}
+
+@keyframes phase-card-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(var(--phase-start-x), 42px, 0) rotate(var(--phase-rotate))
+      scale(0.72);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes phase-card-fly {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+
+  35% {
+    transform: translate3d(0, -42px, 0) rotate(0deg) scale(1.08);
+  }
+
+  66% {
+    transform: translate3d(var(--phase-end-x), 26px, 0) rotate(var(--phase-rotate))
+      scale(0.98);
+  }
+
+  100% {
+    transform: translate3d(var(--phase-end-x), 0, 0) rotate(0deg) scale(1.04);
+  }
+}
+
+@media (max-width: 900px) {
+  .celebration-result-grid,
+  .topcut-reveal-row,
+  .topcut-slots {
+    grid-template-columns: 1fr;
+  }
+
+  .celebration-versus {
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .celebration-card,
+  .celebration-player-crown,
+  .topcut-reveal-card,
+  .topcut-slots,
+  .phase-transition-card,
+  .phase-final-slot {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+  }
+
+  .celebration-confetti__piece {
+    display: none;
   }
 }
 
