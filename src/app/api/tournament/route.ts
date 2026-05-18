@@ -9,6 +9,7 @@ import {
   advanceTournament,
   assignParticipantToTeamSlot,
   buildTournament,
+  claimMobileAdmin,
   confirmManualTeam,
   createRandomTeams,
   deleteBotParticipantDuringSetup,
@@ -34,15 +35,44 @@ export async function GET() {
   return NextResponse.json(state);
 }
 
+const ADMIN_PROTECTED_ACTIONS = new Set([
+  "revealSwissGroup",
+  "reportMatch",
+  "advancePhase",
+  "forceSemifinalsFromCurrentStandings",
+  "returnToSetup",
+]);
+
+function getAdminDeviceId(body: { adminDeviceId?: unknown; payload?: unknown }): string {
+  const payload = body.payload as { adminDeviceId?: unknown } | null | undefined;
+  return String(body.adminDeviceId ?? payload?.adminDeviceId ?? "").trim();
+}
+
+function assertAdminAllowed(
+  current: ReturnType<typeof refreshTournamentState>,
+  action: string,
+  body: { adminDeviceId?: unknown; payload?: unknown },
+): void {
+  if (!current.adminDeviceId || !ADMIN_PROTECTED_ACTIONS.has(action)) {
+    return;
+  }
+
+  if (getAdminDeviceId(body) !== current.adminDeviceId) {
+    throw new Error("Esta accion esta reservada al movil admin.");
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       action: string;
       payload?: unknown;
+      adminDeviceId?: unknown;
     };
 
     const nextState = await mutateTournamentState(async (storedState) => {
       const current = refreshTournamentState(storedState);
+      assertAdminAllowed(current, body.action, body);
 
       switch (body.action) {
         case "reset":
@@ -52,6 +82,11 @@ export async function POST(request: Request) {
           return setPublicBaseUrl(
             current,
             String((body.payload as { publicBaseUrl?: string })?.publicBaseUrl ?? ""),
+          );
+        case "claimMobileAdmin":
+          return claimMobileAdmin(
+            current,
+            body.payload as Parameters<typeof claimMobileAdmin>[1],
           );
         case "createRandomTeams":
           return createRandomTeams(current);

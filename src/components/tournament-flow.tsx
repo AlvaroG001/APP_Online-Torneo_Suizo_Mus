@@ -29,6 +29,7 @@ import type {
 } from "@/lib/tournament";
 import {
   TOP_CUT,
+  advanceTournament,
   forceSemifinalsFromCurrentStandings,
   getMatchMobileResultConflict,
   getTournamentStructure,
@@ -98,7 +99,12 @@ interface FinalClassificationItem {
 
 type Screen = "url" | "setup" | "registration" | "swiss" | "topcut";
 type TopCutRevealMode = "advance" | "force";
-type PhaseTransitionRevealMode = "semifinalsToFinal";
+type PhaseTransitionRevealMode = "swissToSemifinals" | "semifinalsToFinal";
+type ViewportProfile = {
+  width: number;
+  height: number;
+  density: "compact" | "balanced" | "spacious";
+};
 
 interface MatchClosedCelebrationEvent {
   id: string;
@@ -127,6 +133,7 @@ interface TopCutRevealState {
 interface PhaseTransitionRevealState {
   mode: PhaseTransitionRevealMode;
   teams: Team[];
+  nextAction?: "advance" | "forceSemifinals" | "none";
 }
 
 interface CelebrationAudioController {
@@ -156,6 +163,12 @@ interface CelebrationHit extends CelebrationTone {
 function subscribeToNothing(): () => void {
   return () => {};
 }
+
+const DEFAULT_VIEWPORT_PROFILE = {
+  width: 1920,
+  height: 1080,
+  density: "balanced",
+} satisfies ViewportProfile;
 
 const CELEBRATION_SESSION_KEY = "mus-tournament-celebrations-v1";
 const playedCelebrationAudioIds = new Set<string>();
@@ -209,7 +222,13 @@ function writeSeenCelebrationIds(ids: Set<string>): void {
 }
 
 function getMatchCelebrationId(match: Match): string | null {
-  if (match.status !== "completed" || !match.winnerId || match.bye || match.marker) {
+  if (
+    match.stage === "final" ||
+    match.status !== "completed" ||
+    !match.winnerId ||
+    match.bye ||
+    match.marker
+  ) {
     return null;
   }
 
@@ -313,13 +332,9 @@ function getNewCelebrationEvents(
   return events;
 }
 
-function getViewportProfileSnapshot(): {
-  width: number;
-  height: number;
-  density: "compact" | "balanced" | "spacious";
-} {
+function getViewportProfileSnapshot(): ViewportProfile {
   if (typeof window === "undefined") {
-    return { width: 1920, height: 1080, density: "balanced" };
+    return DEFAULT_VIEWPORT_PROFILE;
   }
 
   const width = Math.round(window.visualViewport?.width ?? window.innerWidth);
@@ -336,8 +351,8 @@ function getViewportProfileSnapshot(): {
   return { width, height, density };
 }
 
-function useViewportProfile(): ReturnType<typeof getViewportProfileSnapshot> {
-  const [profile, setProfile] = useState(getViewportProfileSnapshot);
+function useViewportProfile(): ViewportProfile {
+  const [profile, setProfile] = useState<ViewportProfile>(DEFAULT_VIEWPORT_PROFILE);
 
   useEffect(() => {
     function handleResize(): void {
@@ -1388,6 +1403,18 @@ function PhaseTransitionOverlay({
   const audioRef = useRef(audio);
   const onDoneRef = useRef(onDone);
   const revealKey = `${reveal.mode}:${reveal.teams.map((team) => team.id).join("|")}`;
+  const isSemifinalReveal = reveal.mode === "swissToSemifinals";
+  const title = isSemifinalReveal ? "Semifinales preparadas" : "Final preparada";
+  const subtitle = isSemifinalReveal
+    ? "El Top 4 toma posicion"
+    : "Los ganadores toman posicion";
+  const teamLabel = isSemifinalReveal ? "Semifinalista" : "Finalista";
+  const slotItems = isSemifinalReveal
+    ? [
+        { label: "Semifinal 1", left: reveal.teams[0], right: reveal.teams[3] },
+        { label: "Semifinal 2", left: reveal.teams[1], right: reveal.teams[2] },
+      ]
+    : [{ label: "Final", left: reveal.teams[0], right: reveal.teams[1] }];
 
   useEffect(() => {
     audioRef.current = audio;
@@ -1410,19 +1437,25 @@ function PhaseTransitionOverlay({
   return (
     <div className="celebration-overlay celebration-overlay--phase" role="status" aria-live="polite">
       <ConfettiBurst seed={`phase-${reveal.teams.map((team) => team.id).join("-")}`} />
-      <div className="celebration-card celebration-card--phase">
+      <div
+        className={`celebration-card celebration-card--phase ${
+          isSemifinalReveal ? "celebration-card--phase-semifinals" : ""
+        }`}
+      >
         <div className="celebration-card__header">
-          <p>Final preparada</p>
-          <span>Los ganadores toman posición</span>
+          <p>{title}</p>
+          <span>{subtitle}</span>
         </div>
 
-        <div className="phase-transition-track">
+        <div className="phase-transition-track" data-team-count={reveal.teams.length}>
           {reveal.teams.map((team, index) => (
             <article
               key={`${team.id}-phase-transition`}
               className={`phase-transition-card phase-transition-card--${index + 1}`}
             >
-              <p>Finalista {index + 1}</p>
+              <p>
+                {teamLabel} {index + 1}
+              </p>
               <TeamFaces team={team} size="xl" />
               <h3>{team.name}</h3>
               <span>{team.pointsWon} pts</span>
@@ -1430,10 +1463,15 @@ function PhaseTransitionOverlay({
           ))}
         </div>
 
-        <div className="phase-final-slot" aria-hidden="true">
-          <strong>{reveal.teams[0]?.name ?? "Finalista"}</strong>
-          <em>vs</em>
-          <strong>{reveal.teams[1]?.name ?? "Finalista"}</strong>
+        <div className="phase-final-slots" data-team-count={reveal.teams.length} aria-hidden="true">
+          {slotItems.map((slot) => (
+            <div key={slot.label} className="phase-final-slot">
+              <span>{slot.label}</span>
+              <strong>{slot.left?.name ?? teamLabel}</strong>
+              <em>vs</em>
+              <strong>{slot.right?.name ?? teamLabel}</strong>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -2867,12 +2905,14 @@ function MatchTile({
   pointsOnlyMode,
   onOpen,
   density = "regular",
+  disabledOpen = false,
 }: {
   match: Match;
   teamsById: Map<string, Team>;
   pointsOnlyMode: boolean;
   onOpen: (matchId: string) => void;
   density?: "regular" | "compact" | "micro" | "nano";
+  disabledOpen?: boolean;
 }) {
   const teamA = match.teamAId ? teamsById.get(match.teamAId) : null;
   const teamB = match.teamBId ? teamsById.get(match.teamBId) : null;
@@ -2960,11 +3000,16 @@ function MatchTile({
     <button
       type="button"
       onClick={() => onOpen(match.id)}
+      disabled={disabledOpen}
       className={`match-tile w-full rounded-[8px] border ${
         mobileConflict
           ? "border-rose-400/70 bg-rose-500/12"
           : "border-[var(--stroke)] bg-[var(--surface-strong)]"
-      } ${tilePadding} text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]`}
+      } ${tilePadding} text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition ${
+        disabledOpen
+          ? "cursor-default"
+          : "hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]"
+      }`}
     >
       <div className="flex items-center justify-between gap-2">
         <p className={`font-mono uppercase text-[var(--accent)] ${metaText}`}>
@@ -3229,6 +3274,7 @@ function SwissStageScreen({
   onBack,
   isPending,
   celebrationLocked,
+  viewerMode = false,
   feedback,
 }: {
   state: TournamentState;
@@ -3249,6 +3295,7 @@ function SwissStageScreen({
   onBack: () => void;
   isPending: boolean;
   celebrationLocked: boolean;
+  viewerMode?: boolean;
   feedback: FeedbackState | null;
 }) {
   const structure = getTournamentStructure(state.config.teamCount, state.config.format);
@@ -3487,7 +3534,7 @@ function SwissStageScreen({
       >
         <header className="flex min-h-0 flex-wrap items-center gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-2 py-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <button type="button" onClick={onBack} className="swiss-back-button button-secondary">
+            <button type="button" onClick={onBack} className={`swiss-back-button button-secondary ${viewerMode ? "hidden" : ""}`}>
               ← Volver al registro
             </button>
             <p className="truncate font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--accent)]">
@@ -3497,7 +3544,7 @@ function SwissStageScreen({
           </div>
 
           <div className="flex min-w-0 flex-none flex-wrap items-center justify-end gap-2">
-            {nextDrawableGroupLabel ? (
+            {!viewerMode && nextDrawableGroupLabel ? (
               <button
                 type="button"
                 onClick={() => onRevealGroup(nextDrawableGroupLabel)}
@@ -3507,7 +3554,7 @@ function SwissStageScreen({
               </button>
             ) : null}
             <StageBadge label={`Ronda ${state.currentSwissRound} / ${state.swissRoundsPlanned}`} />
-            {structure.topCut > 0 ? (
+            {!viewerMode && structure.topCut > 0 ? (
               <button
                 type="button"
                 onClick={onForceSemifinals}
@@ -3517,14 +3564,18 @@ function SwissStageScreen({
                 {celebrationLocked ? "Celebrando" : "Semifinales ahora"}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={onAdvance}
-              disabled={isPending || celebrationLocked || (!roundComplete && !canAdvanceToTopCut)}
-              className="button-primary"
-            >
-              {celebrationLocked ? "Esperando animaciones" : advanceLabel}
-            </button>
+            {!viewerMode ? (
+              <button
+                type="button"
+                onClick={onAdvance}
+                disabled={isPending || celebrationLocked || (!roundComplete && !canAdvanceToTopCut)}
+                className="button-primary"
+              >
+                {celebrationLocked ? "Esperando animaciones" : advanceLabel}
+              </button>
+            ) : (
+              <StageBadge label="visor" />
+            )}
             <div className="hidden max-w-[min(28vw,420px)] text-right xl:block">
               <p className="truncate font-mono text-[8px] uppercase tracking-[0.16em] text-[rgba(242,247,238,0.42)]">
                 URL activa · {state.config.publicBaseUrl || "sin definir"}
@@ -3757,6 +3808,7 @@ function SwissStageScreen({
                                     pointsOnlyMode={pointsOnlyMode}
                                     onOpen={onOpenMatch}
                                     density={swissMatchTileDensity}
+                                    disabledOpen={viewerMode}
                                   />
                                 ))}
                               </div>
@@ -3885,7 +3937,7 @@ function SwissStageScreen({
       </main>
       <FeedbackToast feedback={feedback} />
 
-      {activeMatch && activeTeams?.teamA && activeTeams.teamB ? (
+      {!viewerMode && activeMatch && activeTeams?.teamA && activeTeams.teamB ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
           <div className="max-h-[88vh] w-full max-w-6xl overflow-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -3972,6 +4024,7 @@ function PlayoffStageScreen({
   isPending,
   isSyncing,
   celebrationLocked,
+  viewerMode = false,
   feedback,
 }: {
   state: TournamentState;
@@ -3992,6 +4045,7 @@ function PlayoffStageScreen({
   isPending: boolean;
   isSyncing: boolean;
   celebrationLocked: boolean;
+  viewerMode?: boolean;
   feedback: FeedbackState | null;
 }) {
   const pointsOnlyMode = isPointsOnlyMatchFormat(state.config);
@@ -4026,7 +4080,13 @@ function PlayoffStageScreen({
       eyebrow={isSemifinals ? "Fase final · Semifinales" : "Fase final · Final"}
       title={title}
       activeUrl={state.config.publicBaseUrl}
-      leftSlot={<BackButton label="Volver a configuración" onClick={onBack} />}
+      leftSlot={
+        viewerMode ? (
+          <StageBadge label="Control en movil admin" />
+        ) : (
+          <BackButton label="Volver a configuración" onClick={onBack} />
+        )
+      }
       rightSlot={
         <div className="flex flex-wrap gap-2">
           <StageBadge label={formatTournamentFormatLabel(state.config.format)} />
@@ -4058,6 +4118,7 @@ function PlayoffStageScreen({
                     teamsById={teamsById}
                     pointsOnlyMode={pointsOnlyMode}
                     onOpen={onOpenMatch}
+                    disabledOpen={viewerMode}
                   />
                 ) : null}
               </div>
@@ -4082,6 +4143,7 @@ function PlayoffStageScreen({
                     teamsById={teamsById}
                     pointsOnlyMode={pointsOnlyMode}
                     onOpen={onOpenMatch}
+                    disabledOpen={viewerMode}
                   />
                 ) : null}
               </div>
@@ -4102,6 +4164,7 @@ function PlayoffStageScreen({
                   teamsById={teamsById}
                   pointsOnlyMode={pointsOnlyMode}
                   onOpen={onOpenMatch}
+                  disabledOpen={viewerMode}
                 />
               ) : null}
             </div>
@@ -4114,23 +4177,27 @@ function PlayoffStageScreen({
             <StageBadge label={roundComplete ? "fase cerrada" : "faltan resultados"} />
           </div>
 
-          <div className="flex flex-wrap gap-3">
-            <button type="button" onClick={onSync} disabled={isSyncing} className="button-secondary">
-              {isSyncing ? "Sincronizando" : "Sincronizar"}
-            </button>
-            <button
-              type="button"
-              onClick={onAdvance}
-              disabled={isPending || celebrationLocked || !roundComplete}
-              className="button-primary"
-            >
-              {celebrationLocked ? "Esperando animaciones" : advanceLabel}
-            </button>
-          </div>
+          {!viewerMode ? (
+            <div className="flex flex-wrap gap-3">
+              <button type="button" onClick={onSync} disabled={isSyncing} className="button-secondary">
+                {isSyncing ? "Sincronizando" : "Sincronizar"}
+              </button>
+              <button
+                type="button"
+                onClick={onAdvance}
+                disabled={isPending || celebrationLocked || !roundComplete}
+                className="button-primary"
+              >
+                {celebrationLocked ? "Esperando animaciones" : advanceLabel}
+              </button>
+            </div>
+          ) : (
+            <StageBadge label="Control desde movil" />
+          )}
         </footer>
       </div>
 
-      {activeMatch && activeTeams?.teamA && activeTeams.teamB ? (
+      {!viewerMode && activeMatch && activeTeams?.teamA && activeTeams.teamB ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
           <div className="max-h-[88vh] w-full max-w-6xl overflow-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -4340,6 +4407,7 @@ export function TournamentFlow({
   const activeCelebrationRef = useRef<CelebrationEvent | null>(null);
   const celebrationQueueRef = useRef<CelebrationEvent[]>([]);
   const applyTournamentStateRef = useRef<(nextState: TournamentState) => void>(() => undefined);
+  const suppressNextPhaseRevealRef = useRef(false);
   const browserOrigin = useSyncExternalStore(
     subscribeToNothing,
     getBrowserOriginSnapshot,
@@ -4354,6 +4422,7 @@ export function TournamentFlow({
   const canUseCurrentOrigin = Boolean(browserOrigin) && !isLocalhostLike(browserOrigin);
   const needsPublicUrlGate = !normalizeBaseUrlInput(state.config.publicBaseUrl);
   const registrationUrl = getRegistrationUrl(state.config.publicBaseUrl, browserOrigin);
+  const hasMobileAdmin = Boolean(state.adminDeviceId);
   const hasExistingProgress =
     state.participants.length > 0 ||
     state.teams.length > 0 ||
@@ -4471,6 +4540,21 @@ export function TournamentFlow({
     queueCelebrationEvent(event, true);
   }
 
+  function getSemifinalTransitionTeams(sourceState: TournamentState): Team[] {
+    return getSemifinalRevealItems(sourceState)
+      .slice(0, TOP_CUT)
+      .map(({ team }) => team);
+  }
+
+  function getFinalTransitionTeams(sourceState: TournamentState): Team[] {
+    const finalMatch = sourceState.matches.find((match) => match.stage === "final");
+    const teamsById = new Map(sourceState.teams.map((entry) => [entry.id, entry]));
+
+    return [finalMatch?.teamAId, finalMatch?.teamBId]
+      .map((teamId) => (teamId ? teamsById.get(teamId) ?? null : null))
+      .filter((entry): entry is Team => Boolean(entry));
+  }
+
   function applyTournamentState(nextState: TournamentState): void {
     const previousState = latestStateRef.current;
     const seenIds = seenCelebrationIdsRef.current ?? readSeenCelebrationIds();
@@ -4478,6 +4562,32 @@ export function TournamentFlow({
 
     const events = getNewCelebrationEvents(previousState, nextState, seenIds);
     startCelebrationEvents(events);
+
+    if (previousState.stage !== nextState.stage) {
+      if (suppressNextPhaseRevealRef.current) {
+        suppressNextPhaseRevealRef.current = false;
+      } else if (previousState.stage === "swiss" && nextState.stage === "semifinals") {
+        const teams = getSemifinalTransitionTeams(nextState);
+
+        if (teams.length >= TOP_CUT) {
+          setPhaseTransitionReveal({
+            mode: "swissToSemifinals",
+            teams,
+            nextAction: "none",
+          });
+        }
+      } else if (previousState.stage === "semifinals" && nextState.stage === "final") {
+        const teams = getFinalTransitionTeams(nextState);
+
+        if (teams.length >= 2) {
+          setPhaseTransitionReveal({
+            mode: "semifinalsToFinal",
+            teams: teams.slice(0, 2),
+            nextAction: "none",
+          });
+        }
+      }
+    }
 
     previousStateRef.current = nextState;
     latestStateRef.current = nextState;
@@ -4762,12 +4872,32 @@ export function TournamentFlow({
     );
   }
 
-  function executeAdvanceTournament(): void {
+  function executeAdvanceTournament(options: { suppressSemifinalReveal?: boolean } = {}): void {
+    if (options.suppressSemifinalReveal) {
+      suppressNextPhaseRevealRef.current = true;
+    }
+
     runMutation(
       () => postAction({ action: "advancePhase" }),
       "Fase actualizada.",
       (nextState) => {
         queueChampionCelebration(nextState);
+        if (
+          !options.suppressSemifinalReveal &&
+          state.stage === "swiss" &&
+          nextState.stage === "semifinals"
+        ) {
+          const teams = getSemifinalTransitionTeams(nextState);
+
+          if (teams.length >= TOP_CUT) {
+            setPhaseTransitionReveal({
+              mode: "swissToSemifinals",
+              teams,
+              nextAction: "none",
+            });
+          }
+        }
+
         if (nextState.stage === "swiss") {
           setForcedScreen("swiss");
         } else if (nextState.stage === "semifinals" || nextState.stage === "final") {
@@ -4776,6 +4906,11 @@ export function TournamentFlow({
           setForcedScreen(null);
         }
         setActiveMatchId(null);
+      },
+      () => {
+        if (options.suppressSemifinalReveal) {
+          suppressNextPhaseRevealRef.current = false;
+        }
       },
     );
   }
@@ -4796,12 +4931,37 @@ export function TournamentFlow({
     if (
       state.stage === "swiss" &&
       structure.topCut > 0 &&
-      explicitTopCutItems.length >= structure.topCut &&
       semifinalRevealItems.length >= structure.topCut
     ) {
-      setTopCutReveal({ mode: "advance", items: semifinalRevealItems.slice(0, TOP_CUT) });
-      setFeedback(null);
-      return;
+      try {
+        const projectedState = advanceTournament(state);
+
+        if (projectedState.stage === "semifinals") {
+          const projectedRevealItems = getSemifinalRevealItems(projectedState);
+          const revealItems =
+            projectedRevealItems.length >= structure.topCut
+              ? projectedRevealItems
+              : semifinalRevealItems;
+
+          setPhaseTransitionReveal({
+            mode: "swissToSemifinals",
+            teams: revealItems.slice(0, TOP_CUT).map(({ team }) => team),
+            nextAction: "advance",
+          });
+          setFeedback(null);
+          return;
+        }
+      } catch {
+        if (explicitTopCutItems.length >= structure.topCut) {
+          setPhaseTransitionReveal({
+            mode: "swissToSemifinals",
+            teams: semifinalRevealItems.slice(0, TOP_CUT).map(({ team }) => team),
+            nextAction: "advance",
+          });
+          setFeedback(null);
+          return;
+        }
+      }
     }
 
     if (state.stage === "semifinals") {
@@ -4811,6 +4971,7 @@ export function TournamentFlow({
         setPhaseTransitionReveal({
           mode: "semifinalsToFinal",
           teams: finalTeams.slice(0, 2),
+          nextAction: "advance",
         });
         setFeedback(null);
         return;
@@ -4852,7 +5013,11 @@ export function TournamentFlow({
     const semifinalRevealItems = getSemifinalRevealItems(projectedSemifinalState);
 
     if (semifinalRevealItems.length >= TOP_CUT) {
-      setTopCutReveal({ mode: "force", items: semifinalRevealItems.slice(0, TOP_CUT) });
+      setPhaseTransitionReveal({
+        mode: "swissToSemifinals",
+        teams: semifinalRevealItems.slice(0, TOP_CUT).map(({ team }) => team),
+        nextAction: "forceSemifinals",
+      });
       setFeedback(null);
       return;
     }
@@ -4894,9 +5059,10 @@ export function TournamentFlow({
       },
       "Resultado guardado.",
       (nextState) => {
-        queueCompletedMatchCelebration(nextState, match.id);
         if (match.stage === "final") {
           queueChampionCelebration(nextState);
+        } else {
+          queueCompletedMatchCelebration(nextState, match.id);
         }
         setActiveMatchId(null);
       },
@@ -4923,8 +5089,17 @@ export function TournamentFlow({
   }
 
   function handlePhaseTransitionDone(): void {
+    const nextAction = phaseTransitionReveal?.nextAction ?? "advance";
     setPhaseTransitionReveal(null);
-    executeAdvanceTournament();
+
+    if (nextAction === "advance") {
+      executeAdvanceTournament({ suppressSemifinalReveal: true });
+      return;
+    }
+
+    if (nextAction === "forceSemifinals") {
+      executeForceSemifinalsFromCurrentStandings();
+    }
   }
 
   function handleRevealSwissGroup(bracketLabel: string): void {
@@ -5171,6 +5346,7 @@ export function TournamentFlow({
           onBack={handleBackFromSwiss}
           isPending={isPending}
           celebrationLocked={celebrationLocked}
+          viewerMode={hasMobileAdmin}
           feedback={feedback}
         />
         {celebrationLayer}
@@ -5232,6 +5408,7 @@ export function TournamentFlow({
         isPending={isPending}
         isSyncing={isSyncing}
         celebrationLocked={celebrationLocked}
+        viewerMode={hasMobileAdmin}
         feedback={feedback}
       />
       {celebrationLayer}

@@ -40,6 +40,10 @@ function sanitizeState(raw: Partial<TournamentState>): TournamentState {
     chatMessages: Array.isArray(raw.chatMessages)
       ? raw.chatMessages
       : base.chatMessages,
+    adminDeviceId:
+      typeof raw.adminDeviceId === "string" && raw.adminDeviceId.trim()
+        ? raw.adminDeviceId
+        : null,
     teamCreationMode:
       raw.teamCreationMode === "random" || raw.teamCreationMode === "manual"
         ? raw.teamCreationMode

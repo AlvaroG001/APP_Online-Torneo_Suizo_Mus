@@ -126,6 +126,7 @@ export interface TournamentState {
   swissRoundsPlanned: number;
   currentSwissRound: number;
   topCut: number;
+  adminDeviceId: string | null;
   participants: Participant[];
   teams: Team[];
   matches: Match[];
@@ -171,6 +172,11 @@ export interface ParticipantRegistrationInput {
   photoUrl: string;
 }
 
+export interface MobileAdminClaimInput {
+  deviceId: string;
+  password: string;
+}
+
 export interface TeamSlotAssignmentInput {
   teamId: string;
   slot: PlayerSlot;
@@ -210,6 +216,7 @@ export function isPointsOnlyMatchFormat(config: TournamentConfig): boolean {
 }
 
 const nowIso = () => new Date().toISOString();
+const MOBILE_ADMIN_PASSWORD = "admin123";
 
 function createPlayer(slot: PlayerSlot): PlayerProfile {
   return {
@@ -406,6 +413,7 @@ export function createEmptyTournament(): TournamentState {
     swissRoundsPlanned: structure.swissRounds,
     currentSwissRound: 0,
     topCut: structure.topCut,
+    adminDeviceId: null,
     participants: [],
     teams: [],
     matches: [],
@@ -458,6 +466,7 @@ export function buildTournament(input: TournamentResetInput): TournamentState {
     swissRoundsPlanned: structure.swissRounds,
     currentSwissRound: 0,
     topCut: structure.topCut,
+    adminDeviceId: null,
     participants: [],
     teams: [],
     matches: [],
@@ -1319,6 +1328,31 @@ export function registerParticipant(
     refreshTeamName(team);
   }
 
+  return refreshTournamentState(cloned);
+}
+
+export function claimMobileAdmin(
+  state: TournamentState,
+  input: MobileAdminClaimInput,
+): TournamentState {
+  const deviceId = input.deviceId.trim();
+
+  if (!deviceId) {
+    throw new Error("No se ha podido identificar este movil.");
+  }
+
+  if (input.password !== MOBILE_ADMIN_PASSWORD) {
+    throw new Error("La contrasena de admin no es correcta.");
+  }
+
+  const cloned = cloneState(state);
+
+  if (cloned.adminDeviceId && cloned.adminDeviceId !== deviceId) {
+    throw new Error("Ya hay un movil registrado como admin.");
+  }
+
+  cloned.adminDeviceId = deviceId;
+  cloned.updatedAt = nowIso();
   return refreshTournamentState(cloned);
 }
 

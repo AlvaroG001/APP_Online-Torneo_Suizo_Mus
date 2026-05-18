@@ -990,6 +990,10 @@ img {
   min-height: min(68vh, 42rem);
 }
 
+.celebration-card--phase-semifinals {
+  width: min(96vw, 88rem);
+}
+
 .phase-transition-track {
   position: relative;
   display: grid;
@@ -999,6 +1003,12 @@ img {
   align-items: center;
   margin-top: clamp(1.2rem, 2vw, 1.8rem);
   perspective: 1400px;
+}
+
+.phase-transition-track[data-team-count="4"] {
+  min-height: clamp(16rem, 34vh, 24rem);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(0.65rem, 1.4vw, 1rem);
 }
 
 .phase-transition-card {
@@ -1019,6 +1029,11 @@ img {
     phase-card-enter 760ms cubic-bezier(0.16, 1, 0.3, 1) forwards,
     phase-card-fly 3200ms cubic-bezier(0.64, 0, 0.2, 1) 1350ms forwards,
     celebration-winner-glow 1800ms ease-in-out 4700ms infinite alternate;
+}
+
+.phase-transition-track[data-team-count="4"] .phase-transition-card {
+  gap: 0.65rem;
+  padding: clamp(0.85rem, 1.3vw, 1.15rem);
 }
 
 .topcut-reveal-card:nth-child(1) {
@@ -1054,6 +1069,20 @@ img {
   animation-delay: 180ms, 1530ms, 4880ms;
 }
 
+.phase-transition-card--3 {
+  --phase-start-x: -22vw;
+  --phase-end-x: 4%;
+  --phase-rotate: -3deg;
+  animation-delay: 300ms, 1650ms, 5000ms;
+}
+
+.phase-transition-card--4 {
+  --phase-start-x: 46vw;
+  --phase-end-x: -5%;
+  --phase-rotate: 5deg;
+  animation-delay: 420ms, 1770ms, 5120ms;
+}
+
 .phase-transition-card p,
 .phase-transition-card span,
 .phase-final-slot {
@@ -1083,19 +1112,41 @@ img {
   color: var(--muted);
 }
 
+.phase-transition-track[data-team-count="4"] .phase-transition-card h3 {
+  font-size: clamp(1rem, 1.6vw, 1.45rem);
+}
+
+.phase-final-slots {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.phase-final-slots[data-team-count="4"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .phase-final-slot {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: clamp(0.8rem, 2vw, 1.5rem);
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: clamp(0.45rem, 1vw, 0.9rem);
   align-items: center;
-  margin-top: 1rem;
   border: 1px solid var(--accent-border);
   border-radius: 999px;
   background: var(--accent-soft);
-  padding: 0.8rem 1rem;
+  padding: 0.8rem clamp(0.85rem, 1.5vw, 1.2rem);
   opacity: 0;
   text-align: center;
   animation: topcut-slots-in 720ms cubic-bezier(0.16, 1, 0.3, 1) 5400ms forwards;
+}
+
+.phase-final-slot span {
+  color: var(--muted);
+  font-size: 0.58rem;
+  letter-spacing: 0.16em;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .phase-final-slot strong {
@@ -1108,6 +1159,7 @@ img {
 .phase-final-slot em {
   color: var(--accent);
   font-style: normal;
+  white-space: nowrap;
 }
 
 .celebration-card--champion {
@@ -1476,8 +1528,28 @@ img {
     grid-template-columns: 1fr;
   }
 
+  .phase-transition-track[data-team-count="4"],
+  .phase-final-slots[data-team-count="4"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .celebration-versus {
     min-width: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .phase-transition-track[data-team-count="4"],
+  .phase-final-slots[data-team-count="4"] {
+    grid-template-columns: 1fr;
+  }
+
+  .phase-final-slot {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  .phase-final-slot span {
+    display: none;
   }
 }
 

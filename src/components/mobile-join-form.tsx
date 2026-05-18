@@ -15,6 +15,8 @@ import type {
 import {
   canDeviceSubmitTeamResult,
   getMatchMobileResultConflict,
+  getTournamentStructure,
+  isTeamComplete,
   isPointsOnlyMatchFormat,
 } from "@/lib/tournament";
 
@@ -38,6 +40,10 @@ interface MobileResultDraft {
 interface PendingMobileResultConfirmation {
   matchId: string;
   score: MatchScore;
+}
+
+interface AdminMatchEditor {
+  matchId: string;
 }
 
 const DEVICE_STORAGE_KEY = "torneo-mus-device-id";
@@ -333,6 +339,44 @@ function scoreSummary(score: MatchScore, pointsOnlyMode: boolean): string {
     : `${score.teamA.vacas}-${score.teamB.vacas} vacas · ${score.teamA.games}-${score.teamB.games} juegos · ${score.teamA.points}-${score.teamB.points} puntos`;
 }
 
+function getCurrentMobileAdminMatches(state: TournamentState): Match[] {
+  if (state.stage === "swiss") {
+    return state.matches.filter(
+      (match) =>
+        match.stage === "swiss" &&
+        (!match.marker || match.marker === "autoWin") &&
+        match.roundIndex === state.currentSwissRound,
+    );
+  }
+
+  if (state.stage === "semifinals") {
+    return state.matches.filter((match) => match.stage === "semifinal");
+  }
+
+  if (state.stage === "final") {
+    return state.matches.filter((match) => match.stage === "final");
+  }
+
+  return [];
+}
+
+function getNextMobileAdminGroupLabel(state: TournamentState): string | null {
+  const hiddenMatch = getCurrentMobileAdminMatches(state).find(
+    (match) => match.stage === "swiss" && !match.revealed && !match.marker,
+  );
+
+  return hiddenMatch?.bracketLabel ?? null;
+}
+
+function getAdminMatchTeam(
+  state: TournamentState,
+  match: Match | null,
+  side: "teamA" | "teamB",
+): Team | null {
+  const teamId = side === "teamA" ? match?.teamAId : match?.teamBId;
+  return teamId ? state.teams.find((entry) => entry.id === teamId) ?? null : null;
+}
+
 export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const [state, setState] = useState(initialState);
   const [deviceId, setDeviceId] = useState("");
@@ -342,6 +386,13 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string>("");
+  const [activeMobileTab, setActiveMobileTab] = useState<"player" | "admin">("player");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [isClaimingAdmin, setIsClaimingAdmin] = useState(false);
+  const [isAdminActionPending, setIsAdminActionPending] = useState(false);
+  const [adminParticipantNames, setAdminParticipantNames] = useState<Record<string, string>>({});
+  const [adminMatchEditor, setAdminMatchEditor] = useState<AdminMatchEditor | null>(null);
+  const [adminResultDrafts, setAdminResultDrafts] = useState<Record<string, MobileResultDraft>>({});
   const [chatInput, setChatInput] = useState("");
   const [mobileResultDrafts, setMobileResultDrafts] = useState<
     Record<string, MobileResultDraft>
@@ -487,6 +538,44 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const pendingMobileResultTeamB = pendingMobileResultMatch?.teamBId
     ? state.teams.find((entry) => entry.id === pendingMobileResultMatch.teamBId) ?? null
     : null;
+  const isMobileAdmin = Boolean(deviceId && state.adminDeviceId === deviceId);
+  const canShowAdminTab = deviceIdReady && (!state.adminDeviceId || isMobileAdmin);
+  const effectiveMobileTab = canShowAdminTab ? activeMobileTab : "player";
+  const adminExpectedParticipants = state.config.teamCount * 2;
+  const adminRegisteredCount = state.participants.length;
+  const adminRegistrationComplete = adminRegisteredCount === adminExpectedParticipants;
+  const adminCanCreateTeams =
+    state.stage === "setup" &&
+    adminRegistrationComplete &&
+    adminRegisteredCount % 2 === 0;
+  const adminTeamsReady =
+    state.teams.length === state.config.teamCount &&
+    state.teams.every((entry) => isTeamComplete(entry) && entry.confirmed);
+  const adminStructure = getTournamentStructure(state.config.teamCount, state.config.format);
+  const adminMatches = getCurrentMobileAdminMatches(state);
+  const adminRoundComplete =
+    adminMatches.length > 0 &&
+    adminMatches.every((match) => match.status === "completed" || match.bye);
+  const adminNextGroupLabel = getNextMobileAdminGroupLabel(state);
+  const adminActiveMatch = adminMatchEditor
+    ? state.matches.find((match) => match.id === adminMatchEditor.matchId) ?? null
+    : null;
+  const adminActiveTeamA = getAdminMatchTeam(state, adminActiveMatch, "teamA");
+  const adminActiveTeamB = getAdminMatchTeam(state, adminActiveMatch, "teamB");
+  const adminActiveDraft = adminActiveMatch
+    ? adminResultDrafts[adminActiveMatch.id] ?? buildMobileResultDraft(adminActiveMatch, null)
+    : null;
+  const assignedAdminParticipantIds = useMemo(
+    () =>
+      new Set(
+        state.teams.flatMap((entry) =>
+          entry.players
+            .map((player) => player.participantId)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ),
+    [state.teams],
+  );
 
   useEffect(() => {
     if (!teamId) {
@@ -496,6 +585,12 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
 
     setTeamNameInput(teamHasCustomName ? teamDisplayName : "");
   }, [teamDisplayName, teamHasCustomName, teamId]);
+
+  useEffect(() => {
+    if (!canShowAdminTab && activeMobileTab === "admin") {
+      setActiveMobileTab("player");
+    }
+  }, [activeMobileTab, canShowAdminTab]);
 
   async function handleFileChange(file: File | null): Promise<void> {
     if (!file) {
@@ -769,6 +864,511 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     }
   }
 
+  async function postAdminAction(action: string, payload?: unknown): Promise<TournamentState> {
+    if (!deviceId) {
+      throw new Error("Todavia no se ha identificado este movil.");
+    }
+
+    const response = await fetch("/api/tournament", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action,
+        payload,
+        adminDeviceId: deviceId,
+      }),
+    });
+    const payloadResponse = (await response.json()) as TournamentState | { error: string };
+
+    if (!response.ok || "error" in payloadResponse) {
+      throw new Error(
+        "error" in payloadResponse ? payloadResponse.error : "No se ha podido ejecutar la accion.",
+      );
+    }
+
+    setState(payloadResponse);
+    return payloadResponse;
+  }
+
+  async function runAdminAction(
+    action: string,
+    payload: unknown,
+    successMessage: string,
+  ): Promise<void> {
+    setIsAdminActionPending(true);
+    setFeedback("");
+
+    try {
+      await postAdminAction(action, payload);
+      setFeedback(successMessage);
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsAdminActionPending(false);
+    }
+  }
+
+  async function handleClaimMobileAdmin(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+
+    if (!deviceId) {
+      setFeedback("Todavia no se ha identificado este movil.");
+      return;
+    }
+
+    setIsClaimingAdmin(true);
+    setFeedback("");
+
+    try {
+      await postAdminAction("claimMobileAdmin", {
+        deviceId,
+        password: adminPassword,
+      });
+      setAdminPassword("");
+      setActiveMobileTab("admin");
+      setFeedback("Este movil ya controla el torneo como admin.");
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsClaimingAdmin(false);
+    }
+  }
+
+  function handleAdminResultDraftChange(
+    match: Match,
+    side: "teamA" | "teamB",
+    field: "vacas" | "games" | "points",
+    value: string,
+  ): void {
+    const digits = value.replace(/[^\d]/g, "");
+    const nextValue =
+      pointsOnlyMode && field === "points" && digits
+        ? String(Math.min(Number(digits), state.config.targetPoints))
+        : digits;
+
+    setAdminResultDrafts((current) => {
+      const existing = current[match.id] ?? buildMobileResultDraft(match, null);
+
+      return {
+        ...current,
+        [match.id]: {
+          ...existing,
+          [side]: {
+            ...existing[side],
+            [field]: nextValue,
+          },
+        },
+      };
+    });
+  }
+
+  async function handleAdminSaveMatch(): Promise<void> {
+    if (!adminActiveMatch || !adminActiveDraft) {
+      return;
+    }
+
+    setIsAdminActionPending(true);
+    setFeedback("");
+
+    try {
+      await postAdminAction("reportMatch", {
+        matchId: adminActiveMatch.id,
+        score: mobileDraftToScore(adminActiveDraft, pointsOnlyMode),
+      });
+
+      if (adminActiveMatch.stage === "final") {
+        await postAdminAction("advancePhase");
+        setFeedback("Final cerrada. La copa ya puede salir en pantalla.");
+      } else {
+        setFeedback("Mesa cerrada desde el movil admin.");
+      }
+
+      setAdminMatchEditor(null);
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsAdminActionPending(false);
+    }
+  }
+
+  const adminScoreFields = pointsOnlyMode
+    ? ([["points", `Puntos max ${state.config.targetPoints}`]] as const)
+    : ([
+        ["vacas", "Vacas"],
+        ["games", "Juegos"],
+        ["points", "Puntos"],
+      ] as const);
+  const adminPanel = !isMobileAdmin ? (
+    <section className="rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-5">
+      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+        Acceso admin
+      </p>
+      <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+        Controlar torneo desde este movil
+      </h2>
+      <form className="mt-4 space-y-3" onSubmit={(event) => void handleClaimMobileAdmin(event)}>
+        <input
+          type="password"
+          value={adminPassword}
+          onChange={(event) => setAdminPassword(event.target.value)}
+          placeholder="Contrasena admin"
+          className="input-shell !bg-[var(--surface-inset)] !text-[var(--foreground)]"
+        />
+        <button
+          type="submit"
+          disabled={isClaimingAdmin || !adminPassword}
+          className="button-primary w-full"
+        >
+          {isClaimingAdmin ? "Comprobando" : "Entrar como admin"}
+        </button>
+      </form>
+    </section>
+  ) : (
+    <div className="space-y-4">
+      <section className="rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+          Panel admin
+        </p>
+        <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+          {formatStageLabel(state.stage)}
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+          Este movil controla el torneo. La pestana Jugador sigue funcionando igual.
+        </p>
+      </section>
+
+      {state.stage === "setup" ? (
+        <>
+          <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                  Registro y parejas
+                </p>
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  {adminRegisteredCount}/{adminExpectedParticipants} personas · {state.teams.length}/{state.config.teamCount} parejas
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-2">
+              <button
+                type="button"
+                onClick={() => void runAdminAction("addBotParticipant", undefined, "Bot anadido.")}
+                disabled={isAdminActionPending || adminRegisteredCount >= adminExpectedParticipants}
+                className="button-secondary w-full"
+              >
+                Anadir bot
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAdminAction("createRandomTeams", undefined, "Parejas sorteadas.")}
+                disabled={isAdminActionPending || !adminCanCreateTeams}
+                className="button-primary w-full"
+              >
+                Sortear parejas aleatoriamente
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAdminAction("prepareManualTeams", undefined, "Modo manual preparado.")}
+                disabled={isAdminActionPending || !adminCanCreateTeams}
+                className="button-secondary w-full"
+              >
+                Formar parejas manualmente
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAdminAction("startTournament", undefined, "Torneo iniciado.")}
+                disabled={isAdminActionPending || !adminTeamsReady}
+                className="button-primary w-full"
+              >
+                Empezar torneo
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+              Personas
+            </p>
+            <div className="mt-3 space-y-2">
+              {state.participants.map((entry) => (
+                <div key={entry.id} className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.42)] p-3">
+                  <div className="flex items-center gap-3">
+                    <img src={entry.photoUrl} alt={entry.name} className="h-12 w-12 rounded-full object-cover" />
+                    <input
+                      value={adminParticipantNames[entry.id] ?? entry.name}
+                      onChange={(event) =>
+                        setAdminParticipantNames((current) => ({
+                          ...current,
+                          [entry.id]: event.target.value,
+                        }))
+                      }
+                      className="input-shell !bg-[var(--surface-inset)] !py-2 !text-[var(--foreground)]"
+                    />
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runAdminAction(
+                          "renameParticipantDuringSetup",
+                          {
+                            participantId: entry.id,
+                            name: (adminParticipantNames[entry.id] ?? entry.name).trim(),
+                          },
+                          "Nombre actualizado.",
+                        )
+                      }
+                      disabled={isAdminActionPending || !(adminParticipantNames[entry.id] ?? entry.name).trim()}
+                      className="button-secondary flex-1"
+                    >
+                      Guardar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void runAdminAction(
+                          "deleteParticipantDuringSetup",
+                          { participantId: entry.id },
+                          "Persona eliminada.",
+                        )
+                      }
+                      disabled={isAdminActionPending}
+                      className="button-secondary flex-1 border-red-500/40 text-red-200"
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {state.participants.length === 0 ? (
+                <p className="text-sm leading-6 text-[var(--muted)]">Aun no hay personas registradas.</p>
+              ) : null}
+            </div>
+          </section>
+
+          {state.teams.length > 0 ? (
+            <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                Parejas
+              </p>
+              <div className="mt-3 space-y-3">
+                {state.teams.map((entry) => (
+                  <div key={entry.id} className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.42)] p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold text-[var(--foreground)]">{entry.name}</p>
+                      <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">
+                        {entry.confirmed ? "confirmada" : "pendiente"}
+                      </span>
+                    </div>
+                    {state.teamCreationMode === "manual" ? (
+                      <div className="mt-3 space-y-2">
+                        {entry.players.map((player) => {
+                          const currentParticipantId = player.participantId ?? "";
+                          const options = state.participants.filter(
+                            (candidate) =>
+                              !assignedAdminParticipantIds.has(candidate.id) ||
+                              candidate.id === currentParticipantId,
+                          );
+
+                          return (
+                            <label key={`${entry.id}-${player.slot}`} className="block">
+                              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                                Plaza {player.slot}
+                              </span>
+                              <select
+                                value={currentParticipantId}
+                                onChange={(event) =>
+                                  void runAdminAction(
+                                    "assignParticipantToTeamSlot",
+                                    {
+                                      teamId: entry.id,
+                                      slot: player.slot,
+                                      participantId: event.target.value || null,
+                                    },
+                                    "Plaza actualizada.",
+                                  )
+                                }
+                                disabled={isAdminActionPending}
+                                className="input-shell mt-1 w-full !bg-[var(--surface-inset)] !text-[var(--foreground)]"
+                              >
+                                <option value="">Libre</option>
+                                {options.map((candidate) => (
+                                  <option key={candidate.id} value={candidate.id}>
+                                    {candidate.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runAdminAction(
+                              "confirmManualTeam",
+                              { teamId: entry.id },
+                              "Pareja confirmada.",
+                            )
+                          }
+                          disabled={isAdminActionPending || !isTeamComplete(entry) || entry.confirmed}
+                          className="button-primary w-full"
+                        >
+                          Confirmar pareja
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                        {entry.players.map((player) => player.name || "Plaza libre").join(" + ")}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </>
+      ) : state.stage === "completed" ? (
+        <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+            Torneo cerrado
+          </p>
+          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+            El torneo ya esta completado. El PC muestra la clasificacion final.
+          </p>
+        </section>
+      ) : (
+        <>
+          <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+              Controles de fase
+            </p>
+            <div className="mt-3 grid gap-2">
+              {state.stage === "swiss" && adminNextGroupLabel ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void runAdminAction(
+                      "revealSwissGroup",
+                      { bracketLabel: adminNextGroupLabel },
+                      `Tramo ${adminNextGroupLabel} sorteado.`,
+                    )
+                  }
+                  disabled={isAdminActionPending}
+                  className="button-primary w-full"
+                >
+                  Sortear {adminNextGroupLabel}
+                </button>
+              ) : null}
+              {state.stage === "swiss" && adminStructure.topCut > 0 ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void runAdminAction(
+                      "forceSemifinalsFromCurrentStandings",
+                      undefined,
+                      "Semifinales generadas.",
+                    )
+                  }
+                  disabled={isAdminActionPending}
+                  className="button-secondary w-full"
+                >
+                  Semifinales ahora
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void runAdminAction("advancePhase", undefined, "Fase actualizada.")}
+                disabled={isAdminActionPending || !adminRoundComplete}
+                className="button-primary w-full"
+              >
+                {state.stage === "swiss"
+                  ? "Pasar ronda"
+                  : state.stage === "semifinals"
+                    ? "Pasar a final"
+                    : "Cerrar torneo"}
+              </button>
+              {state.stage === "swiss" ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void runAdminAction("returnToSetup", undefined, "Vuelta al registro.")
+                  }
+                  disabled={isAdminActionPending}
+                  className="button-secondary w-full"
+                >
+                  Volver al registro
+                </button>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+              Mesas
+            </p>
+            <div className="mt-3 space-y-2">
+              {adminMatches.map((match) => {
+                const matchTeamA = getAdminMatchTeam(state, match, "teamA");
+                const matchTeamB = getAdminMatchTeam(state, match, "teamB");
+                const mobileConflict = getMatchMobileResultConflict(match);
+                const canEditMatch = !match.bye && (match.stage !== "swiss" || match.revealed);
+
+                return (
+                  <button
+                    key={match.id}
+                    type="button"
+                    onClick={() => {
+                      setAdminResultDrafts((current) => ({
+                        ...current,
+                        [match.id]: current[match.id] ?? buildMobileResultDraft(match, null),
+                      }));
+                      setAdminMatchEditor({ matchId: match.id });
+                    }}
+                    disabled={isAdminActionPending || !canEditMatch}
+                    className={`w-full rounded-[8px] border p-3 text-left ${
+                      mobileConflict
+                        ? "border-rose-400/70 bg-rose-500/12"
+                        : "border-[var(--stroke)] bg-[rgba(2,4,3,0.42)]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-[var(--foreground)]">
+                        {match.bracketLabel} · Mesa {match.table}
+                      </p>
+                      <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--accent)]">
+                        {mobileConflict
+                          ? "conflicto"
+                          : match.status === "completed"
+                            ? "cerrada"
+                            : match.revealed || match.stage !== "swiss"
+                              ? "pendiente"
+                              : "sin sortear"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                      {matchTeamA?.name ?? "Equipo A"} vs {matchTeamB?.name ?? "Equipo B"}
+                    </p>
+                    {match.mobileResultReports?.length ? (
+                      <p className="mt-1 text-xs leading-5 text-[var(--muted-soft)]">
+                        {match.mobileResultReports.length} reporte(s) movil(es)
+                      </p>
+                    ) : null}
+                  </button>
+                );
+              })}
+              {adminMatches.length === 0 ? (
+                <p className="text-sm leading-6 text-[var(--muted)]">No hay mesas activas.</p>
+              ) : null}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.055)_0%,transparent_34%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
@@ -809,7 +1409,36 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           </div>
 
           <div className="space-y-6 px-6 py-7">
-            {!deviceIdReady ? (
+            {canShowAdminTab ? (
+              <div className="grid grid-cols-2 gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveMobileTab("player")}
+                  className={`rounded-[7px] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] ${
+                    effectiveMobileTab === "player"
+                      ? "bg-[var(--accent)] text-[var(--accent-ink)]"
+                      : "text-[var(--muted)]"
+                  }`}
+                >
+                  Jugador
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveMobileTab("admin")}
+                  className={`rounded-[7px] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] ${
+                    effectiveMobileTab === "admin"
+                      ? "bg-[var(--accent)] text-[var(--accent-ink)]"
+                      : "text-[var(--muted)]"
+                  }`}
+                >
+                  Admin
+                </button>
+              </div>
+            ) : null}
+
+            {effectiveMobileTab === "admin" ? (
+              adminPanel
+            ) : !deviceIdReady ? (
               <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
                 <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                   Identificando móvil
@@ -1323,6 +1952,81 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           </div>
         </section>
       </div>
+      {adminActiveMatch && adminActiveTeamA && adminActiveTeamB && adminActiveDraft ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5 shadow-[0_30px_120px_rgba(0,0,0,0.44)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                  Cerrar mesa
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+                  {adminActiveMatch.bracketLabel}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdminMatchEditor(null)}
+                className="button-secondary px-3"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              {([
+                ["teamA", adminActiveTeamA],
+                ["teamB", adminActiveTeamB],
+              ] as const).map(([side, sideTeam]) => (
+                <div key={`${adminActiveMatch.id}-${side}-admin-score`} className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.44)] p-3">
+                  <p className="text-sm font-semibold text-[var(--foreground)]">
+                    {sideTeam.name}
+                  </p>
+                  <div className={`mt-2 grid gap-2 ${pointsOnlyMode ? "grid-cols-1" : "grid-cols-3"}`}>
+                    {adminScoreFields.map(([field, label]) => (
+                      <label key={field} className="block">
+                        <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                          {label}
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={adminActiveDraft[side][field]}
+                          onChange={(event) =>
+                            handleAdminResultDraftChange(
+                              adminActiveMatch,
+                              side,
+                              field,
+                              event.target.value,
+                            )
+                          }
+                          className="input-shell mt-1 !bg-[var(--surface-inset)] !py-2 text-center text-base font-semibold !text-[var(--foreground)]"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {getMatchMobileResultConflict(adminActiveMatch) ? (
+              <div className="mt-4 rounded-[8px] border border-rose-400/50 bg-rose-500/12 px-3 py-2 text-sm leading-6 text-rose-100">
+                Hay conflicto entre reportes moviles. Guarda aqui el marcador final para resolverlo.
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => void handleAdminSaveMatch()}
+              disabled={isAdminActionPending}
+              className="button-primary mt-4 w-full"
+            >
+              {isAdminActionPending ? "Guardando" : "Guardar resultado final"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {pendingMobileResultConfirmation &&
       pendingMobileResultMatch &&
       pendingMobileResultTeamA &&
