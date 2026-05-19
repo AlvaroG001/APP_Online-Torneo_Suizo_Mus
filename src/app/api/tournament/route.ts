@@ -40,7 +40,6 @@ const ADMIN_PROTECTED_ACTIONS = new Set([
   "reportMatch",
   "advancePhase",
   "forceSemifinalsFromCurrentStandings",
-  "returnToSetup",
 ]);
 
 function getAdminDeviceId(body: { adminDeviceId?: unknown; payload?: unknown }): string {

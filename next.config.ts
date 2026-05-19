@@ -30,7 +30,12 @@ const configuredAllowedDevOrigins = (process.env.ALLOWED_DEV_ORIGINS ?? "")
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: Array.from(
-    new Set([...getLocalNetworkHosts(), ...configuredAllowedDevOrigins]),
+    new Set([
+      "localhost",
+      "127.0.0.1",
+      ...getLocalNetworkHosts(),
+      ...configuredAllowedDevOrigins,
+    ]),
   ),
 };
 

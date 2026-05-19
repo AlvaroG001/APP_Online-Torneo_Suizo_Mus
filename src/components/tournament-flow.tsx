@@ -171,22 +171,73 @@ const DEFAULT_VIEWPORT_PROFILE = {
 } satisfies ViewportProfile;
 
 const CELEBRATION_SESSION_KEY = "mus-tournament-celebrations-v1";
+const CELEBRATION_AUDIO_SESSION_KEY = "mus-tournament-celebration-audio-v1";
 const playedCelebrationAudioIds = new Set<string>();
 
 function claimCelebrationAudio(audioId: string): boolean {
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    return false;
+  }
+
   const browserAudioIds =
     typeof window === "undefined"
       ? null
       : ((window as Window & { __musCelebrationAudioIds?: Set<string> })
           .__musCelebrationAudioIds ??= new Set<string>());
+  const storedAudioIds = readCelebrationAudioIds();
 
-  if (playedCelebrationAudioIds.has(audioId) || browserAudioIds?.has(audioId)) {
+  if (
+    playedCelebrationAudioIds.has(audioId) ||
+    browserAudioIds?.has(audioId) ||
+    storedAudioIds.has(audioId)
+  ) {
     return false;
   }
 
   playedCelebrationAudioIds.add(audioId);
   browserAudioIds?.add(audioId);
+  storedAudioIds.add(audioId);
+  writeCelebrationAudioIds(storedAudioIds);
   return true;
+}
+
+function readCelebrationAudioIds(): Set<string> {
+  if (typeof window === "undefined") {
+    return new Set();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CELEBRATION_AUDIO_SESSION_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((value): value is string => typeof value === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function writeCelebrationAudioIds(ids: Set<string>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      CELEBRATION_AUDIO_SESSION_KEY,
+      JSON.stringify([...ids].slice(-240)),
+    );
+  } catch {
+    try {
+      window.sessionStorage.setItem(
+        CELEBRATION_AUDIO_SESSION_KEY,
+        JSON.stringify([...ids].slice(-240)),
+      );
+    } catch {
+      // Audio replay prevention is best-effort only.
+    }
+  }
 }
 
 function readSeenCelebrationIds(): Set<string> {
@@ -408,6 +459,7 @@ function useElementHeight<T extends HTMLElement>(): [RefObject<T | null>, number
 
 function useCelebrationAudio(): CelebrationAudioController {
   const audioContextRef = useRef<AudioContext | null>(null);
+  const scheduledSourcesRef = useRef<AudioScheduledSourceNode[]>([]);
   const [muted, setMuted] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
 
@@ -443,6 +495,25 @@ function useCelebrationAudio(): CelebrationAudioController {
     });
   }, [getAudioContext]);
 
+  const stopScheduledAudio = useCallback((): void => {
+    const scheduledSources = scheduledSourcesRef.current;
+    scheduledSourcesRef.current = [];
+
+    for (const source of scheduledSources) {
+      try {
+        source.stop();
+      } catch {
+        // Source may have already ended.
+      }
+
+      try {
+        source.disconnect();
+      } catch {
+        // Some browsers throw when a node is already disconnected.
+      }
+    }
+  }, []);
+
   const playAudioPattern = useCallback(({
     tones = [],
     hits = [],
@@ -458,7 +529,9 @@ function useCelebrationAudio(): CelebrationAudioController {
 
     void context.resume().then(() => {
       setUnlocked(true);
+      stopScheduledAudio();
       const startTime = context.currentTime + 0.02;
+      const scheduledSources: AudioScheduledSourceNode[] = [];
 
       for (const tone of tones) {
         const oscillator = context.createOscillator();
@@ -473,6 +546,7 @@ function useCelebrationAudio(): CelebrationAudioController {
         gain.connect(context.destination);
         oscillator.start(toneStart);
         oscillator.stop(toneStart + tone.duration + 0.02);
+        scheduledSources.push(oscillator);
       }
 
       for (const hit of hits) {
@@ -492,13 +566,19 @@ function useCelebrationAudio(): CelebrationAudioController {
         gain.connect(context.destination);
         oscillator.start(hitStart);
         oscillator.stop(hitStart + hit.duration + 0.02);
+        scheduledSources.push(oscillator);
       }
+
+      scheduledSourcesRef.current = scheduledSources;
     });
-  }, [getAudioContext]);
+  }, [getAudioContext, stopScheduledAudio]);
 
   const toggleMuted = useCallback(() => {
+    stopScheduledAudio();
     setMuted((current) => !current);
-  }, []);
+  }, [stopScheduledAudio]);
+
+  useEffect(() => () => stopScheduledAudio(), [stopScheduledAudio]);
   const playMatchWin = useCallback(
     () => {
       playAudioPattern({
@@ -694,6 +774,48 @@ function normalizeBaseUrlInput(value: string): string {
 
 function isLocalhostLike(origin: string): boolean {
   return origin.includes("localhost") || origin.includes("127.0.0.1");
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split(".").map((part) => Number(part));
+
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+
+  const [first, second] = parts;
+  return (
+    first === 10 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function getBaseUrlHostname(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function needsNetworkUrlRefresh(publicBaseUrl: string, networkBaseUrls: string[]): boolean {
+  const normalizedBaseUrl = normalizeBaseUrlInput(publicBaseUrl);
+  const suggestedNetworkUrl = networkBaseUrls[0] ?? "";
+
+  if (!normalizedBaseUrl) {
+    return true;
+  }
+
+  if (!suggestedNetworkUrl) {
+    return false;
+  }
+
+  const hostname = getBaseUrlHostname(normalizedBaseUrl);
+  return (
+    isLocalhostLike(normalizedBaseUrl) ||
+    (isPrivateIpv4(hostname) && !networkBaseUrls.includes(normalizedBaseUrl))
+  );
 }
 
 function playerName(team: Team, index: number): string {
@@ -1426,13 +1548,17 @@ function PhaseTransitionOverlay({
     const doneId = window.setTimeout(() => onDoneRef.current(), 7200);
 
     if (shouldPlayAudio) {
-      audioRef.current.playFinalReveal();
+      if (isSemifinalReveal) {
+        audioRef.current.playTopCutReveal();
+      } else {
+        audioRef.current.playFinalReveal();
+      }
     }
 
     return () => {
       window.clearTimeout(doneId);
     };
-  }, [revealKey]);
+  }, [isSemifinalReveal, revealKey]);
 
   return (
     <div className="celebration-overlay celebration-overlay--phase" role="status" aria-live="polite">
@@ -4420,7 +4546,10 @@ export function TournamentFlow({
     Boolean(phaseTransitionReveal);
 
   const canUseCurrentOrigin = Boolean(browserOrigin) && !isLocalhostLike(browserOrigin);
-  const needsPublicUrlGate = !normalizeBaseUrlInput(state.config.publicBaseUrl);
+  const needsPublicUrlGate = needsNetworkUrlRefresh(
+    state.config.publicBaseUrl,
+    networkBaseUrls,
+  );
   const registrationUrl = getRegistrationUrl(state.config.publicBaseUrl, browserOrigin);
   const hasMobileAdmin = Boolean(state.adminDeviceId);
   const hasExistingProgress =
@@ -4527,7 +4656,7 @@ export function TournamentFlow({
       return;
     }
 
-    queueCelebrationEvent(event, true);
+    queueCelebrationEvent(event);
   }
 
   function queueChampionCelebration(nextState: TournamentState): void {
@@ -4537,7 +4666,7 @@ export function TournamentFlow({
       return;
     }
 
-    queueCelebrationEvent(event, true);
+    queueCelebrationEvent(event);
   }
 
   function getSemifinalTransitionTeams(sourceState: TournamentState): Team[] {
@@ -4562,6 +4691,26 @@ export function TournamentFlow({
 
     const events = getNewCelebrationEvents(previousState, nextState, seenIds);
     startCelebrationEvents(events);
+
+    setForcedScreen((current) => {
+      if (nextState.stage === "swiss") {
+        return current === "swiss" ? current : "swiss";
+      }
+
+      if (
+        nextState.stage === "semifinals" ||
+        nextState.stage === "final" ||
+        nextState.stage === "completed"
+      ) {
+        return current === "topcut" ? current : "topcut";
+      }
+
+      if (current === "swiss" || current === "topcut") {
+        return null;
+      }
+
+      return current;
+    });
 
     if (previousState.stage !== nextState.stage) {
       if (suppressNextPhaseRevealRef.current) {
@@ -4637,7 +4786,7 @@ export function TournamentFlow({
   }
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => {
+    const syncVisibleSnapshot = () => {
       if (document.visibilityState === "visible") {
         void fetch("/api/tournament", { cache: "no-store" })
           .then((response) => response.json())
@@ -4648,9 +4797,19 @@ export function TournamentFlow({
           })
           .catch(() => undefined);
       }
-    }, 4000);
+    };
 
-    return () => window.clearInterval(intervalId);
+    syncVisibleSnapshot();
+
+    const intervalId = window.setInterval(syncVisibleSnapshot, 1500);
+    window.addEventListener("focus", syncVisibleSnapshot);
+    document.addEventListener("visibilitychange", syncVisibleSnapshot);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", syncVisibleSnapshot);
+      document.removeEventListener("visibilitychange", syncVisibleSnapshot);
+    };
   }, []);
 
   async function postAction(payload: unknown): Promise<TournamentState> {
@@ -5098,6 +5257,7 @@ export function TournamentFlow({
     }
 
     if (nextAction === "forceSemifinals") {
+      suppressNextPhaseRevealRef.current = true;
       executeForceSemifinalsFromCurrentStandings();
     }
   }
@@ -5127,6 +5287,25 @@ export function TournamentFlow({
       "Has vuelto al paso de registro y parejas.",
       () => {
         setForcedScreen("registration");
+        setActiveMatchId(null);
+      },
+    );
+  }
+
+  function handleReturnToSetup(): void {
+    if (
+      !window.confirm(
+        "Si vuelves a configuración se borrarán las semifinales, final y resultados actuales. ¿Continuar?",
+      )
+    ) {
+      return;
+    }
+
+    runMutation(
+      () => postAction({ action: "returnToSetup" }),
+      "Has vuelto a configuración.",
+      () => {
+        setForcedScreen("setup");
         setActiveMatchId(null);
       },
     );
@@ -5209,13 +5388,18 @@ export function TournamentFlow({
         : needsPublicUrlGate
           ? "url"
           : "setup";
+  const validForcedScreen =
+    state.stage === "setup"
+      ? needsPublicUrlGate
+        ? forcedScreen === "url"
+        : forcedScreen === "setup" || forcedScreen === "url" || forcedScreen === "registration"
+      : state.stage === "swiss"
+        ? forcedScreen === "swiss"
+        : state.stage === "semifinals" || state.stage === "final" || state.stage === "completed"
+          ? forcedScreen === "topcut"
+          : false;
   const screen: Screen =
-    forcedScreen === "setup" ||
-    forcedScreen === "url" ||
-    forcedScreen === "registration" ||
-    (forcedScreen === "swiss" && state.stage === "swiss") ||
-    (forcedScreen === "topcut" &&
-      (state.stage === "semifinals" || state.stage === "final" || state.stage === "completed"))
+    forcedScreen && validForcedScreen
       ? forcedScreen
       : stageScreen;
 
@@ -5359,10 +5543,7 @@ export function TournamentFlow({
       <>
         <CompletedTournamentScreen
           state={state}
-          onBack={() => {
-            setForcedScreen("setup");
-            setFeedback(null);
-          }}
+          onBack={handleReturnToSetup}
         />
         {celebrationLayer}
       </>
@@ -5401,10 +5582,7 @@ export function TournamentFlow({
         activeMatchId={activeMatchId}
         onAdvance={handleAdvanceTournament}
         onSync={() => void pullTournamentState()}
-        onBack={() => {
-          setForcedScreen("setup");
-          setFeedback(null);
-        }}
+        onBack={handleReturnToSetup}
         isPending={isPending}
         isSyncing={isSyncing}
         celebrationLocked={celebrationLocked}
