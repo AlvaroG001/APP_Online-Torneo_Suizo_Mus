@@ -21,6 +21,7 @@ const DEFAULTS = {
   photoKb: 150,
   baseUrl: "",
   spawnServer: false,
+  format: "swiss_top4",
 };
 
 function parseArgs() {
@@ -63,6 +64,9 @@ function parseArgs() {
       case "--spawn":
         options.spawnServer = true;
         break;
+      case "--format":
+        options.format = value;
+        break;
       default:
         throw new Error(`Argumento no soportado: ${rawArg}`);
     }
@@ -78,6 +82,10 @@ function parseArgs() {
 
   if (!options.baseUrl) {
     options.baseUrl = `http://127.0.0.1:${options.port}`;
+  }
+
+  if (!["swiss_top4", "swiss_only", "league"].includes(options.format)) {
+    throw new Error("--format debe ser swiss_top4, swiss_only o league.");
   }
 
   return options;
@@ -315,7 +323,7 @@ async function photoReadLoop(metrics, baseUrl, photoUrls, durationMs, timeoutMs)
 function getPlayableMatches(state) {
   return state.matches.filter(
     (match) =>
-      match.stage === "swiss" &&
+      (match.stage === "swiss" || match.stage === "league") &&
       match.revealed &&
       match.status === "pending" &&
       !match.bye &&
@@ -352,6 +360,16 @@ function losingScore() {
 }
 
 async function revealCurrentRound(metrics, baseUrl, state, timeoutMs) {
+  if (state.stage === "league") {
+    return postAction(
+      metrics,
+      baseUrl,
+      "revealLeagueRound",
+      undefined,
+      timeoutMs,
+    );
+  }
+
   const labels = [
     ...new Set(
       state.matches
@@ -534,7 +552,7 @@ async function main() {
         gamesPerVaca: 1,
         targetPoints: 30,
         publicBaseUrl: options.baseUrl,
-        format: "swiss_top4",
+        format: options.format,
       },
       options.timeoutMs,
     );

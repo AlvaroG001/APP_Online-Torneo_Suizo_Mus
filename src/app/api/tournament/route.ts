@@ -15,12 +15,14 @@ import {
   deleteBotParticipantDuringSetup,
   deleteParticipantDuringSetup,
   forceSemifinalsFromCurrentStandings,
+  forceLeagueFinalsFromCurrentStandings,
   postChatMessage,
   prepareManualTeams,
   renameParticipantDuringSetup,
   recordMatchResult,
   refreshTournamentState,
   returnToSetupPreparation,
+  revealLeagueRound,
   revealSwissGroup,
   setPublicBaseUrl,
   setTeamCustomName,
@@ -40,6 +42,8 @@ const ADMIN_PROTECTED_ACTIONS = new Set([
   "reportMatch",
   "advancePhase",
   "forceSemifinalsFromCurrentStandings",
+  "forceLeagueFinalsFromCurrentStandings",
+  "revealLeagueRound",
 ]);
 
 function getAdminDeviceId(body: { adminDeviceId?: unknown; payload?: unknown }): string {
@@ -133,6 +137,8 @@ export async function POST(request: Request) {
             current,
             String((body.payload as { bracketLabel?: string })?.bracketLabel ?? ""),
           );
+        case "revealLeagueRound":
+          return revealLeagueRound(current);
         case "startTournament":
         case "startSwiss":
           return startTournament(current);
@@ -150,6 +156,8 @@ export async function POST(request: Request) {
           return advanceTournament(current);
         case "forceSemifinalsFromCurrentStandings":
           return forceSemifinalsFromCurrentStandings(current);
+        case "forceLeagueFinalsFromCurrentStandings":
+          return forceLeagueFinalsFromCurrentStandings(current);
         case "returnToSetup":
           return returnToSetupPreparation(current);
         default:

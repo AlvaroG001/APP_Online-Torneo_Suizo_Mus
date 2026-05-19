@@ -1011,6 +1011,14 @@ img {
   gap: clamp(0.65rem, 1.4vw, 1rem);
 }
 
+.phase-transition-track[data-team-count="6"],
+.phase-transition-track[data-team-count="8"],
+.phase-transition-track[data-team-count="12"] {
+  min-height: clamp(20rem, 46vh, 31rem);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: clamp(0.45rem, 0.9vw, 0.85rem);
+}
+
 .phase-transition-card {
   display: flex;
   min-width: 0;
@@ -1034,6 +1042,14 @@ img {
 .phase-transition-track[data-team-count="4"] .phase-transition-card {
   gap: 0.65rem;
   padding: clamp(0.85rem, 1.3vw, 1.15rem);
+}
+
+.phase-transition-track[data-team-count="6"] .phase-transition-card,
+.phase-transition-track[data-team-count="8"] .phase-transition-card,
+.phase-transition-track[data-team-count="12"] .phase-transition-card {
+  gap: 0.48rem;
+  border-radius: 12px;
+  padding: clamp(0.6rem, 0.85vw, 0.9rem);
 }
 
 .topcut-reveal-card:nth-child(1) {
@@ -1083,6 +1099,43 @@ img {
   animation-delay: 420ms, 1770ms, 5120ms;
 }
 
+.phase-transition-card--5 {
+  --phase-start-x: -40vw;
+  --phase-end-x: 3%;
+  --phase-rotate: -4deg;
+  animation-delay: 540ms, 1890ms, 5240ms;
+}
+
+.phase-transition-card--6 {
+  --phase-start-x: 40vw;
+  --phase-end-x: -3%;
+  --phase-rotate: 4deg;
+  animation-delay: 660ms, 2010ms, 5360ms;
+}
+
+.phase-transition-card--7,
+.phase-transition-card--9,
+.phase-transition-card--11 {
+  --phase-start-x: -44vw;
+  --phase-end-x: 2%;
+  --phase-rotate: -3deg;
+}
+
+.phase-transition-card--8,
+.phase-transition-card--10,
+.phase-transition-card--12 {
+  --phase-start-x: 44vw;
+  --phase-end-x: -2%;
+  --phase-rotate: 3deg;
+}
+
+.phase-transition-card--7 { animation-delay: 780ms, 2130ms, 5480ms; }
+.phase-transition-card--8 { animation-delay: 900ms, 2250ms, 5600ms; }
+.phase-transition-card--9 { animation-delay: 1020ms, 2370ms, 5720ms; }
+.phase-transition-card--10 { animation-delay: 1140ms, 2490ms, 5840ms; }
+.phase-transition-card--11 { animation-delay: 1260ms, 2610ms, 5960ms; }
+.phase-transition-card--12 { animation-delay: 1380ms, 2730ms, 6080ms; }
+
 .phase-transition-card p,
 .phase-transition-card span,
 .phase-final-slot {
@@ -1116,6 +1169,12 @@ img {
   font-size: clamp(1rem, 1.6vw, 1.45rem);
 }
 
+.phase-transition-track[data-team-count="6"] .phase-transition-card h3,
+.phase-transition-track[data-team-count="8"] .phase-transition-card h3,
+.phase-transition-track[data-team-count="12"] .phase-transition-card h3 {
+  font-size: clamp(0.75rem, 1vw, 1.05rem);
+}
+
 .phase-final-slots {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1125,6 +1184,12 @@ img {
 
 .phase-final-slots[data-team-count="4"] {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.phase-final-slots[data-team-count="6"],
+.phase-final-slots[data-team-count="8"],
+.phase-final-slots[data-team-count="12"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .phase-final-slot {
@@ -1171,8 +1236,8 @@ img {
   justify-content: center;
   text-align: center;
   animation:
-    celebration-champion-in 920ms cubic-bezier(0.16, 1, 0.3, 1) both,
-    celebration-winner-glow 1900ms ease-in-out 1050ms infinite alternate;
+    celebration-champion-in 1600ms cubic-bezier(0.16, 1, 0.3, 1) both,
+    celebration-winner-glow 2300ms ease-in-out 1200ms infinite alternate;
 }
 
 .champion-trophy {
@@ -1529,6 +1594,12 @@ img {
   }
 
   .phase-transition-track[data-team-count="4"],
+  .phase-transition-track[data-team-count="6"],
+  .phase-transition-track[data-team-count="8"],
+  .phase-transition-track[data-team-count="12"],
+  .phase-final-slots[data-team-count="6"],
+  .phase-final-slots[data-team-count="8"],
+  .phase-final-slots[data-team-count="12"],
   .phase-final-slots[data-team-count="4"] {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1540,6 +1611,12 @@ img {
 
 @media (max-width: 560px) {
   .phase-transition-track[data-team-count="4"],
+  .phase-transition-track[data-team-count="6"],
+  .phase-transition-track[data-team-count="8"],
+  .phase-transition-track[data-team-count="12"],
+  .phase-final-slots[data-team-count="6"],
+  .phase-final-slots[data-team-count="8"],
+  .phase-final-slots[data-team-count="12"],
   .phase-final-slots[data-team-count="4"] {
     grid-template-columns: 1fr;
   }

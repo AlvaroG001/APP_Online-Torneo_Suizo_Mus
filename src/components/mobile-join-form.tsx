@@ -15,6 +15,7 @@ import type {
 import {
   canDeviceSubmitTeamResult,
   getMatchMobileResultConflict,
+  getRankedTeams,
   getTournamentStructure,
   isTeamComplete,
   isPointsOnlyMatchFormat,
@@ -45,6 +46,8 @@ interface PendingMobileResultConfirmation {
 interface AdminMatchEditor {
   matchId: string;
 }
+
+type MobileTab = "player" | "standings" | "admin";
 
 const DEVICE_STORAGE_KEY = "torneo-mus-device-id";
 const DEVICE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
@@ -181,10 +184,16 @@ function formatStageLabel(stage: TournamentState["stage"]): string {
   switch (stage) {
     case "swiss":
       return "Swiss Stage";
+    case "league":
+      return "Liga";
     case "semifinals":
       return "Semifinales";
     case "final":
       return "Final";
+    case "leagueSemifinals":
+      return "Semifinales de liga";
+    case "leagueFinals":
+      return "Finales de liga";
     case "completed":
       return "Terminado";
     case "setup":
@@ -232,7 +241,13 @@ function getOpponent(match: Match, team: Team, state: TournamentState): Team | n
 
 function getMatchSortValue(match: Match): number {
   const stageOrder =
-    match.stage === "swiss" ? 0 : match.stage === "semifinal" ? 100 : 200;
+    match.stage === "swiss"
+      ? 0
+      : match.stage === "league"
+        ? 20
+        : match.stage === "semifinal" || match.stage === "leagueSemifinal"
+          ? 100
+          : 200;
   return stageOrder + match.roundIndex * 10 + match.table;
 }
 
@@ -241,7 +256,11 @@ function getMatchHeading(match: Match): string {
     return `Ronda ${match.roundIndex} · ${match.bracketLabel}`;
   }
 
-  if (match.stage === "semifinal") {
+  if (match.stage === "league") {
+    return `Liga · Ronda ${match.roundIndex}`;
+  }
+
+  if (match.stage === "semifinal" || match.stage === "leagueSemifinal") {
     return match.bracketLabel;
   }
 
@@ -339,6 +358,139 @@ function scoreSummary(score: MatchScore, pointsOnlyMode: boolean): string {
     : `${score.teamA.vacas}-${score.teamB.vacas} vacas · ${score.teamA.games}-${score.teamB.games} juegos · ${score.teamA.points}-${score.teamB.points} puntos`;
 }
 
+function playerName(team: Team, index: number): string {
+  return team.players[index]?.name || `Jugador ${index + 1}`;
+}
+
+function MobileTeamFaces({ team }: { team: Team }) {
+  return (
+    <div className="flex items-center">
+      {team.players.map((player, index) => (
+        <div
+          key={`${team.id}-${player.slot}-mobile-face`}
+          className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-[var(--stroke)] bg-[var(--surface-raised)] text-xs font-semibold text-[var(--foreground)] ${
+            index === 1 ? "-ml-2" : ""
+          }`}
+        >
+          {player.photoUrl ? (
+            <img
+              src={player.photoUrl}
+              alt={playerName(team, index)}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <span>{player.slot}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function getMobileStandingsBandClass(rank: number): string {
+  if (rank <= 4) {
+    return "border-[var(--accent-border)] bg-[rgba(124,255,79,0.14)]";
+  }
+
+  if (rank <= 8) {
+    return "border-sky-300/30 bg-sky-400/10";
+  }
+
+  if (rank <= 12) {
+    return "border-amber-300/28 bg-amber-300/9";
+  }
+
+  return "border-[var(--stroke)] bg-[var(--surface-strong)]";
+}
+
+function MobileStandingsPanel({ state }: { state: TournamentState }) {
+  const isLeague = state.config.format === "league";
+  const rankedTeams = getRankedTeams(state);
+
+  return (
+    <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+            Clasificación
+          </p>
+          <h2 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
+            {state.config.title}
+          </h2>
+        </div>
+        <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
+          {rankedTeams.length} parejas
+        </span>
+      </div>
+
+      <div className="mt-5 space-y-2">
+        {rankedTeams.map((entry, index) => {
+          const rank = index + 1;
+
+          return (
+            <article
+              key={`${entry.id}-mobile-standings`}
+              className={`rounded-[8px] border px-3 py-3 ${getMobileStandingsBandClass(rank)}`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[7px] bg-[rgba(2,4,3,0.46)] font-mono text-sm font-bold text-[var(--foreground)]">
+                    {rank}
+                  </span>
+                  <MobileTeamFaces team={entry} />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-[var(--foreground)]">
+                      {entry.name}
+                    </p>
+                    <p className="truncate text-xs text-[var(--muted-soft)]">
+                      {playerName(entry, 0)} · {playerName(entry, 1)}
+                    </p>
+                  </div>
+                </div>
+                <span className="flex h-9 min-w-10 shrink-0 items-center justify-center rounded-[7px] border border-[var(--accent-border)] bg-[var(--background)] font-mono text-sm font-black text-[var(--accent)]">
+                  {isLeague ? entry.leaguePoints : `${entry.wins}-${entry.losses}`}
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-[7px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.34)] px-2 py-1.5">
+                  <p className="font-mono text-[8px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                    Vacas
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-[var(--foreground)]">
+                    {entry.vacasWon}
+                  </p>
+                </div>
+                <div className="rounded-[7px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.34)] px-2 py-1.5">
+                  <p className="font-mono text-[8px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                    Juegos
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-[var(--foreground)]">
+                    {entry.gamesWon}
+                  </p>
+                </div>
+                <div className="rounded-[7px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.34)] px-2 py-1.5">
+                  <p className="font-mono text-[8px] uppercase tracking-[0.14em] text-[var(--muted-soft)]">
+                    Puntos
+                  </p>
+                  <p className="mt-1 text-xs font-semibold text-[var(--foreground)]">
+                    {entry.pointsWon}
+                  </p>
+                </div>
+              </div>
+            </article>
+          );
+        })}
+
+        {rankedTeams.length === 0 ? (
+          <p className="rounded-[8px] border border-dashed border-[var(--stroke)] bg-[rgba(2,4,3,0.24)] px-4 py-8 text-center text-sm leading-6 text-[var(--muted)]">
+            La clasificación aparecerá cuando la mesa cree las parejas.
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function getCurrentMobileAdminMatches(state: TournamentState): Match[] {
   if (state.stage === "swiss") {
     return state.matches.filter(
@@ -346,6 +498,13 @@ function getCurrentMobileAdminMatches(state: TournamentState): Match[] {
         match.stage === "swiss" &&
         (!match.marker || match.marker === "autoWin") &&
         match.roundIndex === state.currentSwissRound,
+    );
+  }
+
+  if (state.stage === "league") {
+    return state.matches.filter(
+      (match) =>
+        match.stage === "league" && match.roundIndex === state.currentSwissRound,
     );
   }
 
@@ -357,12 +516,23 @@ function getCurrentMobileAdminMatches(state: TournamentState): Match[] {
     return state.matches.filter((match) => match.stage === "final");
   }
 
+  if (state.stage === "leagueSemifinals") {
+    return state.matches.filter((match) => match.stage === "leagueSemifinal");
+  }
+
+  if (state.stage === "leagueFinals") {
+    return state.matches.filter((match) => match.stage === "leagueFinal");
+  }
+
   return [];
 }
 
 function getNextMobileAdminGroupLabel(state: TournamentState): string | null {
   const hiddenMatch = getCurrentMobileAdminMatches(state).find(
-    (match) => match.stage === "swiss" && !match.revealed && !match.marker,
+    (match) =>
+      (match.stage === "swiss" || match.stage === "league") &&
+      !match.revealed &&
+      !match.marker,
   );
 
   return hiddenMatch?.bracketLabel ?? null;
@@ -386,7 +556,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string>("");
-  const [activeMobileTab, setActiveMobileTab] = useState<"player" | "admin">("player");
+  const [activeMobileTab, setActiveMobileTab] = useState<MobileTab>("player");
   const [adminPassword, setAdminPassword] = useState("");
   const [isClaimingAdmin, setIsClaimingAdmin] = useState(false);
   const [isAdminActionPending, setIsAdminActionPending] = useState(false);
@@ -502,6 +672,14 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
         .sort((left, right) => getMatchSortValue(left) - getMatchSortValue(right)),
     [teamMatches],
   );
+  const visibleTeamMatches = useMemo(
+    () =>
+      sortedTeamMatches.filter(
+        (match) =>
+          (match.stage !== "swiss" && match.stage !== "league") || match.revealed,
+      ),
+    [sortedTeamMatches],
+  );
   const participantsById = useMemo(
     () => new Map(state.participants.map((entry) => [entry.id, entry])),
     [state.participants],
@@ -521,7 +699,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const teamId = team?.id ?? null;
   const teamDisplayName = team?.name ?? "";
   const teamHasCustomName = team?.nameIsCustom ?? false;
-  const completedMatchesCount = sortedTeamMatches.filter(
+  const completedMatchesCount = visibleTeamMatches.filter(
     (match) => match.status === "completed" || match.bye,
   ).length;
   const pointsOnlyMode = useMemo(
@@ -540,7 +718,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     : null;
   const isMobileAdmin = Boolean(deviceId && state.adminDeviceId === deviceId);
   const canShowAdminTab = deviceIdReady && (!state.adminDeviceId || isMobileAdmin);
-  const effectiveMobileTab = canShowAdminTab ? activeMobileTab : "player";
+  const effectiveMobileTab = canShowAdminTab || activeMobileTab !== "admin" ? activeMobileTab : "player";
   const adminExpectedParticipants = state.config.teamCount * 2;
   const adminRegisteredCount = state.participants.length;
   const adminRegistrationComplete = adminRegisteredCount === adminExpectedParticipants;
@@ -553,6 +731,9 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     state.teams.every((entry) => isTeamComplete(entry) && entry.confirmed);
   const adminStructure = getTournamentStructure(state.config.teamCount, state.config.format);
   const adminMatches = getCurrentMobileAdminMatches(state);
+  const visibleAdminMatches = adminMatches.filter(
+    (match) => (match.stage !== "swiss" && match.stage !== "league") || match.revealed,
+  );
   const adminRoundComplete =
     adminMatches.length > 0 &&
     adminMatches.every((match) => match.status === "completed" || match.bye);
@@ -1246,6 +1427,22 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
               Controles de fase
             </p>
             <div className="mt-3 grid gap-2">
+              {state.stage === "league" && adminNextGroupLabel ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void runAdminAction(
+                      "revealLeagueRound",
+                      undefined,
+                      `Ronda ${state.currentSwissRound} sorteada.`,
+                    )
+                  }
+                  disabled={isAdminActionPending}
+                  className="button-primary w-full"
+                >
+                  Sortear ronda {state.currentSwissRound}
+                </button>
+              ) : null}
               {state.stage === "swiss" && adminNextGroupLabel ? (
                 <button
                   type="button"
@@ -1278,19 +1475,35 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                   Semifinales ahora
                 </button>
               ) : null}
+              {state.stage === "league" ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void runAdminAction(
+                      "forceLeagueFinalsFromCurrentStandings",
+                      undefined,
+                      "Fases finales generadas.",
+                    )
+                  }
+                  disabled={isAdminActionPending || state.config.teamCount <= 4}
+                  className="button-secondary w-full"
+                >
+                  Fases finales ahora
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void runAdminAction("advancePhase", undefined, "Fase actualizada.")}
                 disabled={isAdminActionPending || !adminRoundComplete}
                 className="button-primary w-full"
               >
-                {state.stage === "swiss"
+                {state.stage === "swiss" || state.stage === "league"
                   ? "Pasar ronda"
-                  : state.stage === "semifinals"
+                  : state.stage === "semifinals" || state.stage === "leagueSemifinals"
                     ? "Pasar a final"
                     : "Cerrar torneo"}
               </button>
-              {state.stage === "swiss" ? (
+              {state.stage === "swiss" || state.stage === "league" ? (
                 <button
                   type="button"
                   onClick={() =>
@@ -1310,11 +1523,13 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
               Mesas
             </p>
             <div className="mt-3 space-y-2">
-              {adminMatches.map((match) => {
+              {visibleAdminMatches.map((match) => {
                 const matchTeamA = getAdminMatchTeam(state, match, "teamA");
                 const matchTeamB = getAdminMatchTeam(state, match, "teamB");
                 const mobileConflict = getMatchMobileResultConflict(match);
-                const canEditMatch = !match.bye && (match.stage !== "swiss" || match.revealed);
+                const canEditMatch =
+                  !match.bye &&
+                  ((match.stage !== "swiss" && match.stage !== "league") || match.revealed);
 
                 return (
                   <button
@@ -1343,7 +1558,8 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                           ? "conflicto"
                           : match.status === "completed"
                             ? "cerrada"
-                            : match.revealed || match.stage !== "swiss"
+                            : match.revealed ||
+                                (match.stage !== "swiss" && match.stage !== "league")
                               ? "pendiente"
                               : "sin sortear"}
                       </span>
@@ -1359,7 +1575,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                   </button>
                 );
               })}
-              {adminMatches.length === 0 ? (
+              {visibleAdminMatches.length === 0 ? (
                 <p className="text-sm leading-6 text-[var(--muted)]">No hay mesas activas.</p>
               ) : null}
             </div>
@@ -1409,23 +1625,40 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           </div>
 
           <div className="space-y-6 px-6 py-7">
-            {canShowAdminTab ? (
-              <div className="grid grid-cols-2 gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-1">
-                <button
-                  type="button"
-                  onClick={() => setActiveMobileTab("player")}
-                  className={`rounded-[7px] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] ${
-                    effectiveMobileTab === "player"
-                      ? "bg-[var(--accent)] text-[var(--accent-ink)]"
-                      : "text-[var(--muted)]"
+            <div
+              className={`grid gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-1 ${
+                canShowAdminTab ? "grid-cols-3" : "grid-cols-2"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveMobileTab("player")}
+                aria-label="Jugador"
+                className={`min-w-0 rounded-[7px] px-1.5 py-2 text-center font-mono text-[8px] font-bold uppercase tracking-normal ${
+                  effectiveMobileTab === "player"
+                    ? "bg-[var(--accent)] text-[var(--accent-ink)]"
+                    : "text-[var(--muted)]"
+                }`}
+              >
+                Equipo
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveMobileTab("standings")}
+                aria-label="Clasificación"
+                className={`min-w-0 rounded-[7px] px-1.5 py-2 text-center font-mono text-[8px] font-bold uppercase tracking-normal ${
+                  effectiveMobileTab === "standings"
+                    ? "bg-[var(--accent)] text-[var(--accent-ink)]"
+                    : "text-[var(--muted)]"
                   }`}
-                >
-                  Jugador
-                </button>
+              >
+                Clasif.
+              </button>
+              {canShowAdminTab ? (
                 <button
                   type="button"
                   onClick={() => setActiveMobileTab("admin")}
-                  className={`rounded-[7px] px-3 py-2 font-mono text-[10px] font-bold uppercase tracking-[0.18em] ${
+                  className={`min-w-0 rounded-[7px] px-1.5 py-2 text-center font-mono text-[8px] font-bold uppercase tracking-normal ${
                     effectiveMobileTab === "admin"
                       ? "bg-[var(--accent)] text-[var(--accent-ink)]"
                       : "text-[var(--muted)]"
@@ -1433,11 +1666,13 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                 >
                   Admin
                 </button>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
 
             {effectiveMobileTab === "admin" ? (
               adminPanel
+            ) : effectiveMobileTab === "standings" ? (
+              <MobileStandingsPanel state={state} />
             ) : !deviceIdReady ? (
               <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
                 <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
@@ -1606,10 +1841,12 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                       <div className="mt-4 grid gap-3 sm:grid-cols-2">
                         <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-4 py-3">
                           <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
-                            Balance
+                            {state.config.format === "league" ? "Puntos liga" : "Balance"}
                           </p>
                           <p className="mt-2 text-base font-semibold text-[var(--foreground)]">
-                            {team.wins}-{team.losses}
+                            {state.config.format === "league"
+                              ? team.leaguePoints
+                              : `${team.wins}-${team.losses}`}
                           </p>
                         </div>
                         <div className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-4 py-3">
@@ -1617,13 +1854,13 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                             Partidas cerradas
                           </p>
                           <p className="mt-2 text-base font-semibold text-[var(--foreground)]">
-                            {completedMatchesCount}/{sortedTeamMatches.length}
+                            {completedMatchesCount}/{visibleTeamMatches.length}
                           </p>
                         </div>
                       </div>
                     </section>
 
-                    {sortedTeamMatches.length > 0 ? (
+                    {visibleTeamMatches.length > 0 ? (
                       <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
@@ -1635,12 +1872,12 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                             </div>
                           </div>
                           <span className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted)]">
-                            {completedMatchesCount}/{sortedTeamMatches.length}
+                            {completedMatchesCount}/{visibleTeamMatches.length}
                           </span>
                         </div>
 
                         <div className="mt-5 space-y-3">
-                          {sortedTeamMatches.map((match) => {
+                          {visibleTeamMatches.map((match) => {
                             const opponent = getOpponent(match, team, state);
                             const matchTeamA = match.teamAId
                               ? state.teams.find((entry) => entry.id === match.teamAId) ?? null
@@ -1648,10 +1885,6 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                             const matchTeamB = match.teamBId
                               ? state.teams.find((entry) => entry.id === match.teamBId) ?? null
                               : null;
-                            const hiddenCurrentSwissMatch =
-                              match.stage === "swiss" &&
-                              match.roundIndex === state.currentSwissRound &&
-                              !match.revealed;
                             const perspectiveScore = getPerspectiveScore(match, team.id);
                             const resultLabel = getPerspectiveResultLabel(match, team.id);
                             const mobileConflict = getMatchMobileResultConflict(match);
@@ -1689,9 +1922,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                               >
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                   <p className="text-sm font-semibold text-[var(--foreground)]">
-                                    {hiddenCurrentSwissMatch
-                                      ? "Ronda actual · pendiente de sorteo"
-                                      : getMatchHeading(match)}
+                                    {getMatchHeading(match)}
                                   </p>
                                   <span
                                     className={`rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] ${
@@ -1707,11 +1938,9 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                                 <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                                   {match.bye
                                     ? "Descanso automático para esta ronda."
-                                    : hiddenCurrentSwissMatch
-                                      ? "Tu rival todavía no se muestra porque la mesa no ha sorteado este tramo."
-                                      : opponent
-                                        ? `Contra ${opponent.name}.`
-                                        : "Rival por confirmar."}
+                                    : opponent
+                                      ? `Contra ${opponent.name}.`
+                                      : "Rival por confirmar."}
                                 </p>
 
                                 {perspectiveScore ? (

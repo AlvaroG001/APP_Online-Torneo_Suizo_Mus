@@ -21,6 +21,7 @@ import {
 import type {
   Match,
   MatchScore,
+  LeagueFinalTier,
   Participant,
   PlayerSlot,
   Team,
@@ -31,6 +32,8 @@ import {
   TOP_CUT,
   advanceTournament,
   forceSemifinalsFromCurrentStandings,
+  getLeagueFinalTierLabel,
+  getLeagueRankedTeams,
   getMatchMobileResultConflict,
   getTournamentStructure,
   isPointsOnlyMatchFormat,
@@ -55,6 +58,7 @@ interface SetupFormState {
   targetPoints: string;
   publicBaseUrl: string;
   format: TournamentFormat;
+  leagueLoserBonusEnabled: boolean;
 }
 
 interface ResultDraft {
@@ -97,9 +101,13 @@ interface FinalClassificationItem {
   topRank: 1 | 2 | 3 | 4 | null;
 }
 
-type Screen = "url" | "setup" | "registration" | "swiss" | "topcut";
+type Screen = "url" | "setup" | "registration" | "swiss" | "league" | "topcut";
 type TopCutRevealMode = "advance" | "force";
-type PhaseTransitionRevealMode = "swissToSemifinals" | "semifinalsToFinal";
+type PhaseTransitionRevealMode =
+  | "swissToSemifinals"
+  | "semifinalsToFinal"
+  | "leagueToFinals"
+  | "leagueSemifinalsToFinals";
 type ViewportProfile = {
   width: number;
   height: number;
@@ -133,7 +141,7 @@ interface TopCutRevealState {
 interface PhaseTransitionRevealState {
   mode: PhaseTransitionRevealMode;
   teams: Team[];
-  nextAction?: "advance" | "forceSemifinals" | "none";
+  nextAction?: "advance" | "forceSemifinals" | "forceLeagueFinals" | "none";
 }
 
 interface CelebrationAudioController {
@@ -676,27 +684,55 @@ function useCelebrationAudio(): CelebrationAudioController {
   const playChampion = useCallback(
     () => {
       playAudioPattern({
-        hits: Array.from({ length: 28 }, (_, index) => ({
-          offset: index * 0.145,
-          duration: index % 4 === 0 ? 0.06 : 0.03,
-          frequency: index % 4 === 0 ? 95 : 1120 + (index % 5) * 90,
-          gain: index % 4 === 0 ? 0.062 : 0.024,
-          type: index % 4 === 0 ? ("sine" as OscillatorType) : ("square" as OscillatorType),
-        })),
+        hits: [
+          ...[0, 0.72, 1.44, 2.34, 3.24, 4.34, 5.44, 6.68, 7.92].map((offset, index) => ({
+            offset,
+            duration: index < 3 ? 0.09 : 0.13,
+            frequency: index % 2 === 0 ? 82.41 : 98,
+            gain: 0.052 + index * 0.003,
+            type: "sine" as OscillatorType,
+          })),
+          ...Array.from({ length: 24 }, (_, index) => ({
+            offset: 8.35 + index * 0.07,
+            duration: 0.038,
+            frequency: 1280 + index * 72,
+            gain: 0.015 + index * 0.0011,
+            type: "triangle" as OscillatorType,
+          })),
+        ],
         tones: [
-          { frequency: 146.83, offset: 0, duration: 4.8, gain: 0.024, type: "sine" },
-          { frequency: 220, offset: 0, duration: 4.8, gain: 0.02, type: "sine" },
-          { frequency: 440, offset: 0.05, duration: 0.18, gain: 0.05 },
-          { frequency: 554.37, offset: 0.28, duration: 0.18, gain: 0.052 },
-          { frequency: 659.25, offset: 0.5, duration: 0.2, gain: 0.056 },
-          { frequency: 880, offset: 0.78, duration: 0.22, gain: 0.062 },
-          { frequency: 1108.73, offset: 1.08, duration: 0.24, gain: 0.066 },
-          { frequency: 880, offset: 1.48, duration: 0.18, gain: 0.05 },
-          { frequency: 987.77, offset: 1.7, duration: 0.18, gain: 0.054 },
-          { frequency: 1174.66, offset: 1.94, duration: 0.22, gain: 0.06 },
-          { frequency: 1318.51, offset: 2.26, duration: 0.28, gain: 0.07 },
-          { frequency: 1760, offset: 2.66, duration: 0.72, gain: 0.064 },
-          { frequency: 2217.46, offset: 3.38, duration: 1.08, gain: 0.048, type: "sine" },
+          { frequency: 65.41, offset: 0, duration: 11.8, gain: 0.018, type: "sine" },
+          { frequency: 98, offset: 0.25, duration: 11.5, gain: 0.015, type: "sine" },
+          { frequency: 196, offset: 0.08, duration: 0.42, gain: 0.034, type: "sawtooth" },
+          { frequency: 261.63, offset: 0.08, duration: 0.42, gain: 0.036, type: "sawtooth" },
+          { frequency: 392, offset: 0.08, duration: 0.42, gain: 0.032, type: "sawtooth" },
+          { frequency: 196, offset: 0.78, duration: 0.42, gain: 0.036, type: "sawtooth" },
+          { frequency: 261.63, offset: 0.78, duration: 0.42, gain: 0.038, type: "sawtooth" },
+          { frequency: 392, offset: 0.78, duration: 0.42, gain: 0.034, type: "sawtooth" },
+          { frequency: 261.63, offset: 1.48, duration: 0.62, gain: 0.04, type: "sawtooth" },
+          { frequency: 329.63, offset: 1.48, duration: 0.62, gain: 0.038, type: "sawtooth" },
+          { frequency: 523.25, offset: 1.48, duration: 0.62, gain: 0.036, type: "sawtooth" },
+          { frequency: 392, offset: 2.42, duration: 0.48, gain: 0.046, type: "sawtooth" },
+          { frequency: 523.25, offset: 2.42, duration: 0.48, gain: 0.042, type: "sawtooth" },
+          { frequency: 783.99, offset: 2.42, duration: 0.48, gain: 0.038, type: "sawtooth" },
+          { frequency: 392, offset: 3.08, duration: 0.48, gain: 0.048, type: "sawtooth" },
+          { frequency: 523.25, offset: 3.08, duration: 0.48, gain: 0.044, type: "sawtooth" },
+          { frequency: 783.99, offset: 3.08, duration: 0.48, gain: 0.04, type: "sawtooth" },
+          { frequency: 523.25, offset: 3.82, duration: 0.72, gain: 0.052, type: "sawtooth" },
+          { frequency: 659.25, offset: 3.82, duration: 0.72, gain: 0.047, type: "sawtooth" },
+          { frequency: 1046.5, offset: 3.82, duration: 0.72, gain: 0.04, type: "sawtooth" },
+          { frequency: 783.99, offset: 4.92, duration: 0.7, gain: 0.058, type: "sawtooth" },
+          { frequency: 1046.5, offset: 4.92, duration: 0.7, gain: 0.05, type: "sawtooth" },
+          { frequency: 1567.98, offset: 4.92, duration: 0.7, gain: 0.042, type: "sawtooth" },
+          { frequency: 659.25, offset: 5.95, duration: 0.34, gain: 0.046, type: "sawtooth" },
+          { frequency: 783.99, offset: 6.28, duration: 0.34, gain: 0.05, type: "sawtooth" },
+          { frequency: 987.77, offset: 6.62, duration: 0.42, gain: 0.054, type: "sawtooth" },
+          { frequency: 1318.51, offset: 7.02, duration: 0.58, gain: 0.058, type: "sawtooth" },
+          { frequency: 523.25, offset: 7.86, duration: 3.15, gain: 0.052, type: "sawtooth" },
+          { frequency: 659.25, offset: 7.86, duration: 3.15, gain: 0.048, type: "sawtooth" },
+          { frequency: 783.99, offset: 7.86, duration: 3.15, gain: 0.046, type: "sawtooth" },
+          { frequency: 1046.5, offset: 7.86, duration: 3.25, gain: 0.042, type: "triangle" },
+          { frequency: 1567.98, offset: 8.34, duration: 2.7, gain: 0.032, type: "triangle" },
         ],
       });
     },
@@ -739,6 +775,7 @@ function buildSetupForm(state: TournamentState): SetupFormState {
     targetPoints: String(state.config.targetPoints),
     publicBaseUrl: state.config.publicBaseUrl,
     format: state.config.format,
+    leagueLoserBonusEnabled: state.config.leagueLoserBonusEnabled !== false,
   };
 }
 
@@ -842,10 +879,16 @@ function formatStageLabel(stage: TournamentState["stage"]): string {
   switch (stage) {
     case "swiss":
       return "Swiss Stage";
+    case "league":
+      return "Liga";
     case "semifinals":
       return "Semifinales";
     case "final":
       return "Final";
+    case "leagueSemifinals":
+      return "Semifinales de liga";
+    case "leagueFinals":
+      return "Finales de liga";
     case "completed":
       return "Completado";
     case "setup":
@@ -871,6 +914,13 @@ function getCurrentSwissMatches(state: TournamentState): Match[] {
   );
 }
 
+function getCurrentLeagueMatches(state: TournamentState): Match[] {
+  return state.matches.filter(
+    (match) =>
+      match.stage === "league" && match.roundIndex === state.currentSwissRound,
+  );
+}
+
 function getCurrentPlayoffMatches(state: TournamentState): Match[] {
   if (state.stage === "semifinals") {
     return state.matches.filter((match) => match.stage === "semifinal");
@@ -880,11 +930,19 @@ function getCurrentPlayoffMatches(state: TournamentState): Match[] {
     return state.matches.filter((match) => match.stage === "final");
   }
 
+  if (state.stage === "leagueSemifinals") {
+    return state.matches.filter((match) => match.stage === "leagueSemifinal");
+  }
+
+  if (state.stage === "leagueFinals") {
+    return state.matches.filter((match) => match.stage === "leagueFinal");
+  }
+
   return [];
 }
 
 function getCompletedSemifinalWinners(state: TournamentState): Team[] {
-  if (state.stage !== "semifinals") {
+  if (state.stage !== "semifinals" && state.stage !== "leagueSemifinals") {
     return [];
   }
 
@@ -1083,7 +1141,17 @@ function stageContinuationScreen(stage: TournamentState["stage"]): Screen {
     return "swiss";
   }
 
-  if (stage === "semifinals" || stage === "final" || stage === "completed") {
+  if (stage === "league") {
+    return "league";
+  }
+
+  if (
+    stage === "semifinals" ||
+    stage === "final" ||
+    stage === "leagueSemifinals" ||
+    stage === "leagueFinals" ||
+    stage === "completed"
+  ) {
     return "topcut";
   }
 
@@ -1091,6 +1159,10 @@ function stageContinuationScreen(stage: TournamentState["stage"]): Screen {
 }
 
 function formatTournamentFormatLabel(format: TournamentFormat): string {
+  if (format === "league") {
+    return "Liga";
+  }
+
   return format === "swiss_only" ? "Suizo solo" : "Suizo + top 4";
 }
 
@@ -1120,6 +1192,19 @@ function describeTournamentPlan(
           ? "Con 3 parejas se monta semifinal directa con bye para la cabeza de serie y luego final."
           : "Con 3 o 4 parejas se juega fase eliminatoria directa con semifinales y final.",
       roundsLabel: "2 fases totales",
+    };
+  }
+
+  if (format === "league") {
+    const finalDetail =
+      teamCount > 4
+        ? "Puedes lanzar las fases finales desde la clasificación congelada: Champions, Europa y Conference según número de parejas."
+        : "Liga todos contra todos sin fases finales: hace falta más de 4 parejas para jugar Champions.";
+
+    return {
+      heading: `${structure.swissRounds} rondas de liga`,
+      detail: finalDetail,
+      roundsLabel: `${structure.swissRounds} rondas regulares`,
     };
   }
 
@@ -1526,17 +1611,41 @@ function PhaseTransitionOverlay({
   const onDoneRef = useRef(onDone);
   const revealKey = `${reveal.mode}:${reveal.teams.map((team) => team.id).join("|")}`;
   const isSemifinalReveal = reveal.mode === "swissToSemifinals";
-  const title = isSemifinalReveal ? "Semifinales preparadas" : "Final preparada";
-  const subtitle = isSemifinalReveal
-    ? "El Top 4 toma posicion"
-    : "Los ganadores toman posicion";
-  const teamLabel = isSemifinalReveal ? "Semifinalista" : "Finalista";
-  const slotItems = isSemifinalReveal
+  const isLeagueSemifinalReveal = reveal.mode === "leagueToFinals";
+  const title = isLeagueSemifinalReveal
+    ? "Fases finales preparadas"
+    : isSemifinalReveal
+      ? "Semifinales preparadas"
+      : reveal.mode === "leagueSemifinalsToFinals"
+        ? "Finales de liga preparadas"
+        : "Final preparada";
+  const subtitle = isLeagueSemifinalReveal
+    ? "Champions, Europa y Conference toman posicion"
+    : isSemifinalReveal
+      ? "El Top 4 toma posicion"
+      : "Los ganadores toman posicion";
+  const teamLabel = isSemifinalReveal || isLeagueSemifinalReveal ? "Semifinalista" : "Finalista";
+  const slotItems = isLeagueSemifinalReveal
     ? [
-        { label: "Semifinal 1", left: reveal.teams[0], right: reveal.teams[3] },
-        { label: "Semifinal 2", left: reveal.teams[1], right: reveal.teams[2] },
-      ]
-    : [{ label: "Final", left: reveal.teams[0], right: reveal.teams[1] }];
+        { label: "Champions S1", left: reveal.teams[0], right: reveal.teams[1] },
+        { label: "Champions S2", left: reveal.teams[2], right: reveal.teams[3] },
+        { label: "Europa S1", left: reveal.teams[4], right: reveal.teams[5] },
+        { label: "Europa S2", left: reveal.teams[6], right: reveal.teams[7] },
+        { label: "Conference S1", left: reveal.teams[8], right: reveal.teams[9] },
+        { label: "Conference S2", left: reveal.teams[10], right: reveal.teams[11] },
+      ].filter((slot) => slot.left && slot.right)
+    : isSemifinalReveal
+      ? [
+          { label: "Semifinal 1", left: reveal.teams[0], right: reveal.teams[3] },
+          { label: "Semifinal 2", left: reveal.teams[1], right: reveal.teams[2] },
+        ]
+      : reveal.mode === "leagueSemifinalsToFinals"
+        ? [
+            { label: "Champions Final", left: reveal.teams[0], right: reveal.teams[1] },
+            { label: "Europa Final", left: reveal.teams[2], right: reveal.teams[3] },
+            { label: "Conference Final", left: reveal.teams[4], right: reveal.teams[5] },
+          ].filter((slot) => slot.left && slot.right)
+        : [{ label: "Final", left: reveal.teams[0], right: reveal.teams[1] }];
 
   useEffect(() => {
     audioRef.current = audio;
@@ -1548,7 +1657,7 @@ function PhaseTransitionOverlay({
     const doneId = window.setTimeout(() => onDoneRef.current(), 7200);
 
     if (shouldPlayAudio) {
-      if (isSemifinalReveal) {
+      if (isSemifinalReveal || isLeagueSemifinalReveal) {
         audioRef.current.playTopCutReveal();
       } else {
         audioRef.current.playFinalReveal();
@@ -1558,14 +1667,14 @@ function PhaseTransitionOverlay({
     return () => {
       window.clearTimeout(doneId);
     };
-  }, [isSemifinalReveal, revealKey]);
+  }, [isLeagueSemifinalReveal, isSemifinalReveal, revealKey]);
 
   return (
     <div className="celebration-overlay celebration-overlay--phase" role="status" aria-live="polite">
       <ConfettiBurst seed={`phase-${reveal.teams.map((team) => team.id).join("-")}`} />
       <div
         className={`celebration-card celebration-card--phase ${
-          isSemifinalReveal ? "celebration-card--phase-semifinals" : ""
+          isSemifinalReveal || isLeagueSemifinalReveal ? "celebration-card--phase-semifinals" : ""
         }`}
       >
         <div className="celebration-card__header">
@@ -1584,7 +1693,9 @@ function PhaseTransitionOverlay({
               </p>
               <TeamFaces team={team} size="xl" />
               <h3>{team.name}</h3>
-              <span>{team.pointsWon} pts</span>
+              <span>
+                {isLeagueSemifinalReveal ? `${team.leaguePoints} pts liga` : `${team.pointsWon} pts`}
+              </span>
             </article>
           ))}
         </div>
@@ -1627,7 +1738,7 @@ function ChampionCelebrationOverlay({
       audioRef.current.playChampion();
     }
 
-    const timeoutId = window.setTimeout(() => onDoneRef.current(), 8600);
+    const timeoutId = window.setTimeout(() => onDoneRef.current(), 17200);
 
     return () => window.clearTimeout(timeoutId);
   }, [event.id]);
@@ -2026,7 +2137,7 @@ function TournamentSetupScreen({
             <div className="block md:col-span-2">
               <span className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                 Tipo de torneo
-                <InfoHint label="Elige suizo solo para terminar por clasificación, o suizo + top 4 para jugar semifinales y final." />
+                <InfoHint label="Elige suizo solo para terminar por clasificación, suizo + top 4 para semifinales/final, o liga para todos contra todos con fases finales por clasificación." />
               </span>
               <select
                 value={form.format}
@@ -2037,6 +2148,7 @@ function TournamentSetupScreen({
               >
                 <option value="swiss_top4">Suizo + top 4</option>
                 <option value="swiss_only">Suizo solo</option>
+                <option value="league">Liga</option>
               </select>
             </div>
 
@@ -2088,14 +2200,51 @@ function TournamentSetupScreen({
               </span>
               <input
                 type="number"
-                min={30}
-                max={40}
-                step={1}
+                min={form.format === "league" ? 30 : 30}
+                max={form.format === "league" ? 40 : 40}
+                step={form.format === "league" ? 10 : 1}
                 value={form.targetPoints}
-                onChange={(event) => onChange({ targetPoints: event.target.value })}
+                onChange={(event) =>
+                  onChange({
+                    targetPoints:
+                      form.format === "league" && Number(event.target.value) >= 35
+                        ? "40"
+                        : form.format === "league"
+                          ? "30"
+                          : event.target.value,
+                  })
+                }
                 className="input-shell mt-2"
               />
+              {form.format === "league" ? (
+                <p className="mt-2 text-xs leading-5 text-[var(--muted-soft)]">
+                  En liga solo se permite 30 o 40 para calcular los resultados por puntos.
+                </p>
+              ) : null}
             </label>
+
+            {form.format === "league" ? (
+              <label className="flex items-start gap-3 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4 md:col-span-2">
+                <input
+                  type="checkbox"
+                  checked={form.leagueLoserBonusEnabled}
+                  onChange={(event) =>
+                    onChange({ leagueLoserBonusEnabled: event.target.checked })
+                  }
+                  className="mt-1 h-4 w-4 accent-[var(--accent)]"
+                />
+                <span>
+                  <span className="block font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                    Bonus del perdedor
+                  </span>
+                  <span className="mt-2 block text-sm leading-6 text-[var(--muted-soft)]">
+                    Si está activo, el perdedor suma +1 al llegar a{" "}
+                    {form.targetPoints === "40" ? "30" : "20"} puntos. Si está apagado,
+                    solo puntúa el ganador con +3.
+                  </span>
+                </span>
+              </label>
+            ) : null}
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
@@ -4136,6 +4285,316 @@ function SwissStageScreen({
   );
 }
 
+function getLeagueBandClass(rank: number): string {
+  if (rank <= 4) {
+    return "border-[var(--accent-border)] bg-[rgba(124,255,79,0.18)]";
+  }
+
+  if (rank <= 8) {
+    return "border-sky-300/35 bg-sky-400/12";
+  }
+
+  if (rank <= 12) {
+    return "border-amber-300/30 bg-amber-300/10";
+  }
+
+  return "border-[var(--stroke)] bg-[var(--surface-strong)]";
+}
+
+function LeagueStageScreen({
+  state,
+  resultDrafts,
+  onResultDraftChange,
+  onSaveMatch,
+  onRevealRound,
+  onOpenMatch,
+  onCloseMatch,
+  activeMatchId,
+  onAdvance,
+  onForceLeagueFinals,
+  onBack,
+  isPending,
+  celebrationLocked,
+  viewerMode = false,
+  feedback,
+}: {
+  state: TournamentState;
+  resultDrafts: Record<string, ResultDraft>;
+  onResultDraftChange: (
+    matchId: string,
+    side: "teamA" | "teamB",
+    field: "vacas" | "games" | "points",
+    value: string,
+  ) => void;
+  onSaveMatch: (match: Match) => void;
+  onRevealRound: () => void;
+  onOpenMatch: (matchId: string) => void;
+  onCloseMatch: () => void;
+  activeMatchId: string | null;
+  onAdvance: () => void;
+  onForceLeagueFinals: () => void;
+  onBack: () => void;
+  isPending: boolean;
+  celebrationLocked: boolean;
+  viewerMode?: boolean;
+  feedback: FeedbackState | null;
+}) {
+  const pointsOnlyMode = isPointsOnlyMatchFormat(state.config);
+  const teamsById = useMemo(
+    () => new Map(state.teams.map((team) => [team.id, team])),
+    [state.teams],
+  );
+  const standings = useMemo(() => getLeagueRankedTeams(state), [state]);
+  const currentRoundMatches = getCurrentLeagueMatches(state);
+  const allRoundMatchesRevealed =
+    currentRoundMatches.length > 0 &&
+    currentRoundMatches.every((match) => match.revealed);
+  const roundComplete =
+    allRoundMatchesRevealed &&
+    currentRoundMatches.length > 0 &&
+    currentRoundMatches.every((match) => match.status === "completed" || match.bye);
+  const canLaunchFinals = state.config.teamCount > 4;
+  const activeMatch = activeMatchId
+    ? currentRoundMatches.find((match) => match.id === activeMatchId) ??
+      state.matches.find((match) => match.id === activeMatchId) ??
+      null
+    : null;
+  const activeTeams = activeMatch
+    ? {
+        teamA: activeMatch.teamAId ? teamsById.get(activeMatch.teamAId) ?? null : null,
+        teamB: activeMatch.teamBId ? teamsById.get(activeMatch.teamBId) ?? null : null,
+      }
+    : null;
+  const advanceLabel =
+    state.currentSwissRound >= state.swissRoundsPlanned
+      ? canLaunchFinals
+        ? "Fases finales"
+        : "Cerrar liga"
+      : "Pasar ronda";
+
+  return (
+    <div className="relative h-[100svh] overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(124,255,79,0.05)_0%,transparent_30%),linear-gradient(180deg,#020403_0%,#040705_100%)]" />
+      <TournamentWatermark variant="swiss" />
+
+      <main className="relative z-10 mx-auto grid h-[100svh] w-full max-w-none grid-rows-[auto_minmax(0,1fr)] gap-2 overflow-hidden px-2 py-2 md:px-3">
+        <header className="flex min-h-0 flex-wrap items-center gap-2 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] px-2 py-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <button type="button" onClick={onBack} className={`button-secondary ${viewerMode ? "hidden" : ""}`}>
+              ← Volver al registro
+            </button>
+            <p className="truncate font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--accent)]">
+              Paso 4 · Liga
+            </p>
+            <InfoHint label="Sortea la ronda actual, cierra mesas y la clasificación se actualiza al momento." />
+          </div>
+
+          <div className="flex min-w-0 flex-none flex-wrap items-center justify-end gap-2">
+            {!viewerMode && !allRoundMatchesRevealed ? (
+              <button
+                type="button"
+                onClick={onRevealRound}
+                disabled={isPending || celebrationLocked}
+                className="button-primary"
+              >
+                Sortear ronda {state.currentSwissRound}
+              </button>
+            ) : null}
+            {!viewerMode ? (
+              <button
+                type="button"
+                onClick={onForceLeagueFinals}
+                disabled={isPending || celebrationLocked || !canLaunchFinals}
+                className="button-secondary"
+              >
+                Fases finales ahora
+              </button>
+            ) : null}
+            <StageBadge label={`Ronda ${state.currentSwissRound} / ${state.swissRoundsPlanned}`} />
+            {!viewerMode ? (
+              <button
+                type="button"
+                onClick={onAdvance}
+                disabled={isPending || celebrationLocked || !roundComplete}
+                className="button-primary"
+              >
+                {celebrationLocked ? "Esperando animaciones" : advanceLabel}
+              </button>
+            ) : (
+              <StageBadge label="visor" />
+            )}
+            <div className="hidden max-w-[min(28vw,420px)] text-right xl:block">
+              <p className="truncate font-mono text-[8px] uppercase tracking-[0.16em] text-[rgba(242,247,238,0.42)]">
+                URL activa · {state.config.publicBaseUrl || "sin definir"}
+              </p>
+              <AdminCredit />
+            </div>
+          </div>
+        </header>
+
+        <div className="grid min-h-0 gap-2 lg:grid-cols-[minmax(300px,0.34fr)_minmax(0,0.66fr)]">
+          <aside className="flex min-h-0 flex-col overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)]">
+            <div className="flex flex-none items-center justify-between gap-3 border-b border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                  Clasificación
+                </p>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  Puntos liga · vacas · juegos · puntos
+                </p>
+              </div>
+              <StageBadge label={`${standings.length} parejas`} />
+            </div>
+            <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+              {standings.map((team, index) => {
+                const rank = index + 1;
+
+                return (
+                  <article
+                    key={`${team.id}-league-standing`}
+                    className={`flex min-w-0 items-center justify-between gap-2 rounded-[8px] border px-2.5 py-2 ${getLeagueBandClass(rank)}`}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-8 w-9 flex-none items-center justify-center rounded-[7px] bg-[rgba(2,4,3,0.42)] font-mono text-xs font-bold text-[var(--foreground)]">
+                        {rank}
+                      </span>
+                      <TeamFaces team={team} size="xs" />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-[var(--foreground)]">
+                          {team.name}
+                        </p>
+                        <p className="font-mono text-[8px] uppercase tracking-[0.13em] text-[var(--muted-soft)]">
+                          {team.vacasWon}V · {team.gamesWon}J · {team.pointsWon}P
+                        </p>
+                      </div>
+                    </div>
+                    <span className="flex h-8 min-w-10 items-center justify-center rounded-[7px] border border-[var(--accent-border)] bg-[var(--background)] font-mono text-sm font-black text-[var(--accent)]">
+                      {team.leaguePoints}
+                    </span>
+                  </article>
+                );
+              })}
+            </div>
+          </aside>
+
+          <section className="flex min-h-0 flex-col overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-inset)]">
+            <div className="flex flex-none items-center justify-between gap-3 border-b border-[var(--stroke)] bg-[var(--surface-strong)] px-4 py-3">
+              <div>
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                  Mesas de la ronda
+                </p>
+                <h2 className="mt-1 text-2xl font-semibold text-[var(--foreground)]">
+                  Ronda {state.currentSwissRound}
+                </h2>
+              </div>
+              <StageBadge label={roundComplete ? "ronda cerrada" : allRoundMatchesRevealed ? "en juego" : "sin sortear"} />
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-4">
+              {allRoundMatchesRevealed ? (
+                <div className="grid auto-rows-min gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {currentRoundMatches.map((match) => (
+                    <MatchTile
+                      key={match.id}
+                      match={match}
+                      teamsById={teamsById}
+                      pointsOnlyMode={pointsOnlyMode}
+                      onOpen={onOpenMatch}
+                      disabledOpen={viewerMode}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex h-full min-h-[320px] items-center justify-center rounded-[8px] border border-dashed border-[var(--stroke)] bg-[rgba(2,4,3,0.24)] text-center">
+                  <div className="max-w-md px-6">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                      Ronda oculta
+                    </p>
+                    <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                      Pulsa sortear para mostrar mesas y descansos de esta ronda en PC y móviles.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </main>
+      <FeedbackToast feedback={feedback} />
+
+      {!viewerMode && activeMatch && activeTeams?.teamA && activeTeams.teamB ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(2,4,3,0.86)] px-4 backdrop-blur-sm">
+          <div className="max-h-[88vh] w-full max-w-6xl overflow-auto rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.4)]">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--accent)]">
+                    Mesa activa
+                  </p>
+                  <InfoHint label="Introduce el marcador de cada pareja y guarda el resultado de esta mesa." />
+                </div>
+                <h2 className="mt-2 text-4xl font-semibold tracking-normal text-[var(--foreground)]">
+                  {activeMatch.bracketLabel} · mesa {activeMatch.table}
+                </h2>
+              </div>
+              <button type="button" onClick={onCloseMatch} className="button-secondary">
+                Cerrar
+              </button>
+            </div>
+
+            <article className="mt-6 rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-5">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_110px_minmax(0,1fr)] lg:items-stretch">
+                <MatchResultTeamCard
+                  match={activeMatch}
+                  team={activeTeams.teamA}
+                  side="teamA"
+                  sideDraft={(resultDrafts[activeMatch.id] ?? buildResultDraft(activeMatch)).teamA}
+                  pointsOnlyMode={pointsOnlyMode}
+                  targetPoints={state.config.targetPoints}
+                  onResultDraftChange={onResultDraftChange}
+                />
+
+                <div className="flex items-center justify-center">
+                  <div className="rounded-full border border-[var(--stroke)] bg-[var(--accent-soft)] px-6 py-5 text-center font-mono text-sm uppercase tracking-[0.22em] text-[var(--muted-soft)]">
+                    vs
+                  </div>
+                </div>
+
+                <MatchResultTeamCard
+                  match={activeMatch}
+                  team={activeTeams.teamB}
+                  side="teamB"
+                  sideDraft={(resultDrafts[activeMatch.id] ?? buildResultDraft(activeMatch)).teamB}
+                  pointsOnlyMode={pointsOnlyMode}
+                  targetPoints={state.config.targetPoints}
+                  onResultDraftChange={onResultDraftChange}
+                />
+              </div>
+
+              <MobileResultReportsPanel
+                match={activeMatch}
+                teamsById={teamsById}
+                pointsOnlyMode={pointsOnlyMode}
+              />
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => onSaveMatch(activeMatch)}
+                  disabled={isPending}
+                  className="button-primary"
+                >
+                  Guardar resultado
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PlayoffStageScreen({
   state,
   resultDrafts,
@@ -4197,13 +4656,38 @@ function PlayoffStageScreen({
         teamB: activeMatch.teamBId ? teamsById.get(activeMatch.teamBId) ?? null : null,
       }
     : null;
-  const isSemifinals = state.stage === "semifinals";
-  const title = isSemifinals ? "SEMIFINALES" : "FINAL";
+  const isSemifinals = state.stage === "semifinals" || state.stage === "leagueSemifinals";
+  const isLeaguePlayoff =
+    state.stage === "leagueSemifinals" || state.stage === "leagueFinals";
+  const title = isLeaguePlayoff
+    ? state.stage === "leagueSemifinals"
+      ? "FASES FINALES"
+      : "FINALES DE LIGA"
+    : isSemifinals
+      ? "SEMIFINALES"
+      : "FINAL";
   const advanceLabel = isSemifinals ? "Pasar a la final" : "Cerrar torneo";
+  const matchesByTier = new Map<LeagueFinalTier, Match[]>();
+
+  for (const match of currentMatches) {
+    if (!match.leagueTier) {
+      continue;
+    }
+
+    matchesByTier.set(match.leagueTier, [...(matchesByTier.get(match.leagueTier) ?? []), match]);
+  }
 
   return (
     <ScreenFrame
-      eyebrow={isSemifinals ? "Fase final · Semifinales" : "Fase final · Final"}
+      eyebrow={
+        isLeaguePlayoff
+          ? state.stage === "leagueSemifinals"
+            ? "Liga · Semifinales"
+            : "Liga · Finales"
+          : isSemifinals
+            ? "Fase final · Semifinales"
+            : "Fase final · Final"
+      }
       title={title}
       activeUrl={state.config.publicBaseUrl}
       leftSlot={
@@ -4235,7 +4719,43 @@ function PlayoffStageScreen({
         </section>
 
         <section className="relative grid min-h-0 items-center gap-4 overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[radial-gradient(circle_at_center,rgba(124,255,79,0.12),transparent_38%),var(--surface-inset)] p-4 lg:grid-cols-[minmax(240px,1fr)_minmax(180px,0.7fr)_minmax(240px,1fr)]">
-          {isSemifinals ? (
+          {isLeaguePlayoff ? (
+            <div className="col-span-full grid min-h-0 w-full gap-4 lg:grid-cols-3">
+              {Array.from(matchesByTier.entries()).map(([tier, matches]) => (
+                <section
+                  key={`${tier}-playoff-section`}
+                  className="min-w-0 rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.26)] p-4"
+                >
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div>
+                      <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                        {getLeagueFinalTierLabel(tier)}
+                      </p>
+                      <h3 className="mt-1 text-xl font-semibold text-[var(--foreground)]">
+                        {state.stage === "leagueSemifinals" ? "Semifinales" : "Final"}
+                      </h3>
+                    </div>
+                    <StageBadge label={`${matches.length} mesas`} />
+                  </div>
+                  <div className="grid gap-3">
+                    {matches
+                      .slice()
+                      .sort((left, right) => left.table - right.table)
+                      .map((match) => (
+                        <MatchTile
+                          key={match.id}
+                          match={match}
+                          teamsById={teamsById}
+                          pointsOnlyMode={pointsOnlyMode}
+                          onOpen={onOpenMatch}
+                          disabledOpen={viewerMode}
+                        />
+                      ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          ) : isSemifinals ? (
             <>
               <div className="min-w-0">
                 {currentMatches[0] ? (
@@ -4405,6 +4925,13 @@ function CompletedTournamentScreen({
   onBack: () => void;
 }) {
   const title = "CLASIFICACIÓN";
+  const leagueFinalEntries = (["champions", "europa", "conference"] as const)
+    .map((tier) => ({
+      tier,
+      result: state.leagueFinalResults?.[tier],
+    }))
+    .filter((entry) => entry.result?.championTeamId);
+  const isLeague = state.config.format === "league";
 
   return (
     <ScreenFrame
@@ -4420,7 +4947,44 @@ function CompletedTournamentScreen({
       }
     >
       <div className="flex h-full min-h-0 flex-col gap-4">
-        {state.championTeamId ? (
+        {leagueFinalEntries.length > 0 ? (
+          <section className="grid flex-none gap-4 md:grid-cols-3">
+            {leagueFinalEntries.map(({ tier, result }) => {
+              const champion = state.teams.find(
+                (entry) => entry.id === result?.championTeamId,
+              );
+              const runnerUp = state.teams.find(
+                (entry) => entry.id === result?.runnerUpTeamId,
+              );
+
+              if (!champion) {
+                return null;
+              }
+
+              return (
+                <div
+                  key={`${tier}-winner-card`}
+                  className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)] p-5"
+                >
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                    {getLeagueFinalTierLabel(tier)}
+                  </p>
+                  <div className="mt-4 flex items-center gap-3">
+                    <TeamFaces team={champion} />
+                    <div className="min-w-0">
+                      <p className="truncate text-xl font-semibold text-[var(--foreground)]">
+                        {champion.name}
+                      </p>
+                      <p className="truncate text-sm text-[var(--muted-soft)]">
+                        Campeón{runnerUp ? ` · final contra ${runnerUp.name}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        ) : state.championTeamId ? (
           <section className="grid flex-none gap-4 md:grid-cols-2">
             {[state.championTeamId, state.runnerUpTeamId]
               .filter(Boolean)
@@ -4456,10 +5020,11 @@ function CompletedTournamentScreen({
 
         <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[8px] border border-[var(--stroke)] bg-[var(--surface)]">
           <div className="overflow-x-auto">
-            <div className="min-w-[920px]">
-              <div className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 border-b border-[var(--stroke)] bg-[var(--surface-strong)] px-5 py-3 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
+            <div className="min-w-[1040px]">
+              <div className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px_120px] gap-3 border-b border-[var(--stroke)] bg-[var(--surface-strong)] px-5 py-3 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--muted-soft)]">
                 <span>Puesto</span>
                 <span>Equipo</span>
+                <span>{isLeague ? "Liga pts" : "Balance"}</span>
                 <span>Balance</span>
                 <span>Buchholz</span>
                 <span>Vacas</span>
@@ -4470,11 +5035,11 @@ function CompletedTournamentScreen({
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto">
-            <div className="min-w-[920px] divide-y divide-[var(--stroke)]">
+            <div className="min-w-[1040px] divide-y divide-[var(--stroke)]">
               {state.teams.map((team, index) => (
                 <div
                   key={team.id}
-                  className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px] gap-3 px-5 py-3"
+                  className="grid grid-cols-[72px_minmax(0,1.4fr)_120px_120px_120px_120px_120px_120px] gap-3 px-5 py-3"
                 >
                   <div className="text-lg font-semibold text-[var(--foreground)]">{index + 1}</div>
                   <div className="min-w-0">
@@ -4487,6 +5052,9 @@ function CompletedTournamentScreen({
                         </p>
                       </div>
                     </div>
+                  </div>
+                  <div className="text-sm font-semibold text-[var(--foreground)]">
+                    {isLeague ? team.leaguePoints : `${team.wins}-${team.losses}`}
                   </div>
                   <div className="text-sm font-semibold text-[var(--foreground)]">
                     {team.wins}-{team.losses}
@@ -4684,6 +5252,55 @@ export function TournamentFlow({
       .filter((entry): entry is Team => Boolean(entry));
   }
 
+  function getLeagueSemifinalTransitionTeams(sourceState: TournamentState): Team[] {
+    const teamsById = new Map(sourceState.teams.map((entry) => [entry.id, entry]));
+
+    return sourceState.matches
+      .filter((match) => match.stage === "leagueSemifinal")
+      .sort((left, right) => left.table - right.table)
+      .flatMap((match) => [match.teamAId, match.teamBId])
+      .map((teamId) => (teamId ? teamsById.get(teamId) ?? null : null))
+      .filter((entry): entry is Team => Boolean(entry));
+  }
+
+  function getLeagueFinalTransitionTeams(sourceState: TournamentState): Team[] {
+    const teamsById = new Map(sourceState.teams.map((entry) => [entry.id, entry]));
+
+    return sourceState.matches
+      .filter((match) => match.stage === "leagueFinal")
+      .sort((left, right) => left.table - right.table)
+      .flatMap((match) => [match.teamAId, match.teamBId])
+      .map((teamId) => (teamId ? teamsById.get(teamId) ?? null : null))
+      .filter((entry): entry is Team => Boolean(entry));
+  }
+
+  function getProjectedLeagueFinalTransitionTeams(sourceState: TournamentState): Team[] {
+    const ranked = getLeagueRankedTeams(sourceState);
+    const projectedTeams: Team[] = [];
+
+    const pushTier = (startIndex: number) => {
+      const tierTeams = ranked.slice(startIndex, startIndex + TOP_CUT);
+
+      if (tierTeams.length >= TOP_CUT) {
+        projectedTeams.push(tierTeams[0], tierTeams[3], tierTeams[1], tierTeams[2]);
+      }
+    };
+
+    if (sourceState.config.teamCount > 4) {
+      pushTier(0);
+    }
+
+    if (sourceState.config.teamCount >= 8) {
+      pushTier(4);
+    }
+
+    if (sourceState.config.teamCount >= 12) {
+      pushTier(8);
+    }
+
+    return projectedTeams;
+  }
+
   function applyTournamentState(nextState: TournamentState): void {
     const previousState = latestStateRef.current;
     const seenIds = seenCelebrationIdsRef.current ?? readSeenCelebrationIds();
@@ -4697,15 +5314,21 @@ export function TournamentFlow({
         return current === "swiss" ? current : "swiss";
       }
 
+      if (nextState.stage === "league") {
+        return current === "league" ? current : "league";
+      }
+
       if (
         nextState.stage === "semifinals" ||
         nextState.stage === "final" ||
+        nextState.stage === "leagueSemifinals" ||
+        nextState.stage === "leagueFinals" ||
         nextState.stage === "completed"
       ) {
         return current === "topcut" ? current : "topcut";
       }
 
-      if (current === "swiss" || current === "topcut") {
+      if (current === "swiss" || current === "league" || current === "topcut") {
         return null;
       }
 
@@ -4732,6 +5355,29 @@ export function TournamentFlow({
           setPhaseTransitionReveal({
             mode: "semifinalsToFinal",
             teams: teams.slice(0, 2),
+            nextAction: "none",
+          });
+        }
+      } else if (previousState.stage === "league" && nextState.stage === "leagueSemifinals") {
+        const teams = getLeagueSemifinalTransitionTeams(nextState);
+
+        if (teams.length >= TOP_CUT) {
+          setPhaseTransitionReveal({
+            mode: "leagueToFinals",
+            teams,
+            nextAction: "none",
+          });
+        }
+      } else if (
+        previousState.stage === "leagueSemifinals" &&
+        nextState.stage === "leagueFinals"
+      ) {
+        const teams = getLeagueFinalTransitionTeams(nextState);
+
+        if (teams.length >= 2) {
+          setPhaseTransitionReveal({
+            mode: "leagueSemifinalsToFinals",
+            teams,
             nextAction: "none",
           });
         }
@@ -4878,6 +5524,7 @@ export function TournamentFlow({
             targetPoints: toNumber(setupForm.targetPoints),
             publicBaseUrl: setupForm.publicBaseUrl,
             format: setupForm.format,
+            leagueLoserBonusEnabled: setupForm.leagueLoserBonusEnabled,
           },
         }),
       "Configuración guardada. Ya puedes pasar al registro de jugadores.",
@@ -5009,7 +5656,9 @@ export function TournamentFlow({
   function handleStartTournament(): void {
     const structure = getTournamentStructure(state.config.teamCount, state.config.format);
     const successMessage =
-      structure.entryStage === "swiss"
+      structure.entryStage === "league"
+        ? `Liga preparada. Se jugarán ${structure.swissRounds} rondas todos contra todos.`
+        : structure.entryStage === "swiss"
         ? structure.topCut > 0
           ? `Ronda 1 preparada. Se jugarán ${structure.swissRounds} rondas suizas antes del top 4.`
           : `Ronda 1 preparada. El torneo terminará tras ${structure.swissRounds} rondas suizas.`
@@ -5025,7 +5674,13 @@ export function TournamentFlow({
           state.config.teamCount,
           state.config.format,
         );
-        setForcedScreen(nextStructure.entryStage === "swiss" ? "swiss" : "topcut");
+        setForcedScreen(
+          nextStructure.entryStage === "league"
+            ? "league"
+            : nextStructure.entryStage === "swiss"
+              ? "swiss"
+              : "topcut",
+        );
         setActiveMatchId(null);
       },
     );
@@ -5059,7 +5714,12 @@ export function TournamentFlow({
 
         if (nextState.stage === "swiss") {
           setForcedScreen("swiss");
-        } else if (nextState.stage === "semifinals" || nextState.stage === "final") {
+        } else if (
+          nextState.stage === "semifinals" ||
+          nextState.stage === "final" ||
+          nextState.stage === "leagueSemifinals" ||
+          nextState.stage === "leagueFinals"
+        ) {
           setForcedScreen("topcut");
         } else {
           setForcedScreen(null);
@@ -5137,6 +5797,20 @@ export function TournamentFlow({
       }
     }
 
+    if (state.stage === "leagueSemifinals") {
+      const finalTeams = getCompletedSemifinalWinners(state);
+
+      if (finalTeams.length >= 2) {
+        setPhaseTransitionReveal({
+          mode: "leagueSemifinalsToFinals",
+          teams: finalTeams,
+          nextAction: "advance",
+        });
+        setFeedback(null);
+        return;
+      }
+    }
+
     executeAdvanceTournament();
   }
 
@@ -5182,6 +5856,48 @@ export function TournamentFlow({
     }
 
     executeForceSemifinalsFromCurrentStandings();
+  }
+
+  function executeForceLeagueFinalsFromCurrentStandings(): void {
+    runMutation(
+      () => postAction({ action: "forceLeagueFinalsFromCurrentStandings" }),
+      "Fases finales de liga generadas.",
+      () => {
+        setForcedScreen("topcut");
+        setActiveMatchId(null);
+      },
+    );
+  }
+
+  function handleForceLeagueFinalsFromCurrentStandings(): void {
+    if (celebrationLocked) {
+      setFeedback({
+        tone: "error",
+        text: "Espera a que terminen las animaciones antes de cambiar de fase.",
+      });
+      return;
+    }
+
+    if (state.config.teamCount <= 4) {
+      setFeedback({
+        tone: "error",
+        text: "Hace falta más de 4 parejas para jugar Champions League.",
+      });
+      return;
+    }
+
+    const teams = getProjectedLeagueFinalTransitionTeams(state);
+    if (teams.length >= TOP_CUT) {
+      setPhaseTransitionReveal({
+        mode: "leagueToFinals",
+        teams,
+        nextAction: "forceLeagueFinals",
+      });
+      setFeedback(null);
+      return;
+    }
+
+    executeForceLeagueFinalsFromCurrentStandings();
   }
 
   function handleSaveMatch(match: Match): void {
@@ -5259,7 +5975,20 @@ export function TournamentFlow({
     if (nextAction === "forceSemifinals") {
       suppressNextPhaseRevealRef.current = true;
       executeForceSemifinalsFromCurrentStandings();
+      return;
     }
+
+    if (nextAction === "forceLeagueFinals") {
+      suppressNextPhaseRevealRef.current = true;
+      executeForceLeagueFinalsFromCurrentStandings();
+    }
+  }
+
+  function handleRevealLeagueRound(): void {
+    runMutation(
+      () => postAction({ action: "revealLeagueRound" }),
+      `Ronda ${state.currentSwissRound} sorteada.`,
+    );
   }
 
   function handleRevealSwissGroup(bracketLabel: string): void {
@@ -5276,7 +6005,7 @@ export function TournamentFlow({
   function handleBackFromSwiss(): void {
     if (
       !window.confirm(
-        "Si vuelves al paso 3 se borrarán los emparejamientos y resultados del suizo actual. ¿Continuar?",
+        "Si vuelves al paso 3 se borrarán los emparejamientos y resultados actuales. ¿Continuar?",
       )
     ) {
       return;
@@ -5328,6 +6057,10 @@ export function TournamentFlow({
       return `Torneo en marcha. Ronda ${state.currentSwissRound} del Swiss Stage. Formato ${formatTournamentFormatLabel(state.config.format)}.`;
     }
 
+    if (state.stage === "league") {
+      return `Liga en marcha. Ronda ${state.currentSwissRound} de ${state.swissRoundsPlanned}.`;
+    }
+
     return `Fase actual: ${formatStageLabel(state.stage)}.`;
   }, [state]);
 
@@ -5342,6 +6075,10 @@ export function TournamentFlow({
 
     if (state.stage === "swiss") {
       return "Continuar Swiss Stage";
+    }
+
+    if (state.stage === "league") {
+      return "Continuar liga";
     }
 
     return "Continuar fase actual";
@@ -5383,7 +6120,13 @@ export function TournamentFlow({
   const stageScreen: Screen =
     state.stage === "swiss"
       ? "swiss"
-      : state.stage === "semifinals" || state.stage === "final" || state.stage === "completed"
+      : state.stage === "league"
+        ? "league"
+      : state.stage === "semifinals" ||
+          state.stage === "final" ||
+          state.stage === "leagueSemifinals" ||
+          state.stage === "leagueFinals" ||
+          state.stage === "completed"
         ? "topcut"
         : needsPublicUrlGate
           ? "url"
@@ -5395,7 +6138,13 @@ export function TournamentFlow({
         : forcedScreen === "setup" || forcedScreen === "url" || forcedScreen === "registration"
       : state.stage === "swiss"
         ? forcedScreen === "swiss"
-        : state.stage === "semifinals" || state.stage === "final" || state.stage === "completed"
+        : state.stage === "league"
+          ? forcedScreen === "league"
+        : state.stage === "semifinals" ||
+            state.stage === "final" ||
+            state.stage === "leagueSemifinals" ||
+            state.stage === "leagueFinals" ||
+            state.stage === "completed"
           ? forcedScreen === "topcut"
           : false;
   const screen: Screen =
@@ -5439,6 +6188,12 @@ export function TournamentFlow({
             setSetupForm((current) => ({
               ...current,
               ...patch,
+              targetPoints:
+                patch.format === "league" && current.targetPoints !== "40"
+                  ? "30"
+                  : patch.format === "league"
+                    ? current.targetPoints
+                    : patch.targetPoints ?? current.targetPoints,
             }))
           }
           onSubmit={handleCreateTournament}
@@ -5527,6 +6282,51 @@ export function TournamentFlow({
           activeMatchId={activeMatchId}
           onAdvance={handleAdvanceTournament}
           onForceSemifinals={handleForceSemifinalsFromCurrentStandings}
+          onBack={handleBackFromSwiss}
+          isPending={isPending}
+          celebrationLocked={celebrationLocked}
+          viewerMode={hasMobileAdmin}
+          feedback={feedback}
+        />
+        {celebrationLayer}
+      </>
+    );
+  }
+
+  if (screen === "league") {
+    return (
+      <>
+        <LeagueStageScreen
+          state={state}
+          resultDrafts={resultDrafts}
+          onResultDraftChange={(matchId, side, field, value) => {
+            const match = state.matches.find((entry) => entry.id === matchId);
+            if (!match) {
+              return;
+            }
+
+            setResultDrafts((current) => ({
+              ...current,
+              [matchId]: {
+                ...(current[matchId] ?? buildResultDraft(match)),
+                [side]: {
+                  ...(current[matchId]?.[side] ?? {
+                    vacas: "0",
+                    games: "0",
+                    points: "0",
+                  }),
+                  [field]: value,
+                },
+              },
+            }));
+          }}
+          onSaveMatch={handleSaveMatch}
+          onRevealRound={handleRevealLeagueRound}
+          onOpenMatch={(matchId) => setActiveMatchId(matchId)}
+          onCloseMatch={() => setActiveMatchId(null)}
+          activeMatchId={activeMatchId}
+          onAdvance={handleAdvanceTournament}
+          onForceLeagueFinals={handleForceLeagueFinalsFromCurrentStandings}
           onBack={handleBackFromSwiss}
           isPending={isPending}
           celebrationLocked={celebrationLocked}
