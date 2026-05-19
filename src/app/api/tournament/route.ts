@@ -17,6 +17,7 @@ import {
   forceSemifinalsFromCurrentStandings,
   forceLeagueFinalsFromCurrentStandings,
   postChatMessage,
+  postChatAudioMessage,
   prepareManualTeams,
   renameParticipantDuringSetup,
   recordMatchResult,
@@ -126,6 +127,11 @@ export async function POST(request: Request) {
           return postChatMessage(
             current,
             body.payload as Parameters<typeof postChatMessage>[1],
+          );
+        case "postChatAudioMessage":
+          return postChatAudioMessage(
+            current,
+            body.payload as Parameters<typeof postChatAudioMessage>[1],
           );
         case "setTeamCustomName":
           return setTeamCustomName(

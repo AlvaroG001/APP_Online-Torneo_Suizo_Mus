@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 export const TOP_CUT = 4;
 export const DIRECT_SEMIFINAL_THRESHOLD = 4;
 export const LEAGUE_FINAL_TIERS = ["champions", "europa", "conference"] as const;
+export const MAX_CHAT_REACTION_CHARACTERS = 32;
+export const MAX_CHAT_AUDIO_SECONDS = 5;
+export const MAX_CHAT_AUDIO_DURATION_MS = MAX_CHAT_AUDIO_SECONDS * 1000;
 
 export type TournamentStage =
   | "setup"
@@ -141,6 +144,9 @@ export interface ChatMessage {
   participantId: string;
   text: string;
   createdAt: string;
+  type?: "text" | "audio";
+  audioUrl?: string;
+  audioDurationMs?: number;
 }
 
 export interface TournamentState {
@@ -215,6 +221,12 @@ export interface TeamConfirmationInput {
 export interface ChatMessageInput {
   deviceId: string;
   text: string;
+}
+
+export interface ChatAudioMessageInput {
+  deviceId: string;
+  audioUrl: string;
+  durationMs: number;
 }
 
 export interface TeamNameUpdateInput {
@@ -3067,7 +3079,7 @@ export function postChatMessage(
   input: ChatMessageInput,
 ): TournamentState {
   const deviceId = input.deviceId.trim();
-  const text = input.text.trim();
+  const text = input.text.trim().replace(/\s+/g, " ");
 
   if (!deviceId) {
     throw new Error("Falta identificar el móvil que envía el mensaje.");
@@ -3075,6 +3087,10 @@ export function postChatMessage(
 
   if (!text) {
     throw new Error("Escribe algo antes de mandar el mensaje.");
+  }
+
+  if (Array.from(text).length > MAX_CHAT_REACTION_CHARACTERS) {
+    throw new Error(`El mensaje debe tener ${MAX_CHAT_REACTION_CHARACTERS} caracteres o menos.`);
   }
 
   const cloned = cloneState(state);
@@ -3090,6 +3106,53 @@ export function postChatMessage(
     id: randomUUID(),
     participantId: participant.id,
     text,
+    type: "text",
+    createdAt: nowIso(),
+  });
+
+  if (cloned.chatMessages.length > 200) {
+    cloned.chatMessages = cloned.chatMessages.slice(-200);
+  }
+
+  return refreshTournamentState(cloned);
+}
+
+export function postChatAudioMessage(
+  state: TournamentState,
+  input: ChatAudioMessageInput,
+): TournamentState {
+  const deviceId = input.deviceId.trim();
+  const audioUrl = input.audioUrl.trim();
+  const durationMs = Math.max(0, Math.round(input.durationMs));
+
+  if (!deviceId) {
+    throw new Error("Falta identificar el móvil que envía el audio.");
+  }
+
+  if (!audioUrl.startsWith("/api/uploads/")) {
+    throw new Error("El audio no es válido.");
+  }
+
+  if (durationMs <= 0 || durationMs > MAX_CHAT_AUDIO_DURATION_MS + 500) {
+    throw new Error(`El audio debe durar ${MAX_CHAT_AUDIO_SECONDS} segundos o menos.`);
+  }
+
+  const cloned = cloneState(state);
+  const participant = cloned.participants.find(
+    (entry) => entry.deviceId === deviceId,
+  );
+
+  if (!participant) {
+    throw new Error("Este móvil todavía no está registrado en el torneo.");
+  }
+
+  cloned.chatMessages.push({
+    id: randomUUID(),
+    participantId: participant.id,
+    text: "Audio",
+    type: "audio",
+    audioUrl,
+    audioDurationMs: durationMs,
     createdAt: nowIso(),
   });
 

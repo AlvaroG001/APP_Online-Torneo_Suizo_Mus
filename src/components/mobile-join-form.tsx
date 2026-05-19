@@ -13,6 +13,9 @@ import type {
   TournamentState,
 } from "@/lib/tournament";
 import {
+  MAX_CHAT_AUDIO_DURATION_MS,
+  MAX_CHAT_AUDIO_SECONDS,
+  MAX_CHAT_REACTION_CHARACTERS,
   canDeviceSubmitTeamResult,
   getMatchMobileResultConflict,
   getRankedTeams,
@@ -57,6 +60,101 @@ const CAMERA_SAFE_IMAGE_TYPES = new Set([
   "image/webp",
 ]);
 const MAX_IMAGE_DIMENSION = 1800;
+const QUICK_CHAT_REACTIONS = ["🔥", "💪", "👏", "😂"];
+const AUDIO_MIME_TYPE_CANDIDATES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/mp4",
+  "audio/ogg;codecs=opus",
+];
+
+function getSupportedAudioMimeType(): string {
+  if (typeof MediaRecorder === "undefined") {
+    return "";
+  }
+
+  return AUDIO_MIME_TYPE_CANDIDATES.find((mimeType) =>
+    MediaRecorder.isTypeSupported(mimeType),
+  ) ?? "";
+}
+
+function getAudioFileExtension(mimeType: string): string {
+  if (mimeType.includes("quicktime")) {
+    return "mov";
+  }
+
+  if (mimeType.includes("mp4") || mimeType.includes("m4a")) {
+    return "m4a";
+  }
+
+  if (mimeType.includes("ogg")) {
+    return "ogg";
+  }
+
+  if (mimeType.includes("wav")) {
+    return "wav";
+  }
+
+  return "webm";
+}
+
+function isAudioCarrierFile(file: File): boolean {
+  return file.type.startsWith("audio/") || file.type.startsWith("video/");
+}
+
+function canUseInlineAudioRecorder(): boolean {
+  return Boolean(
+    typeof window !== "undefined" &&
+      window.isSecureContext &&
+      typeof MediaRecorder !== "undefined" &&
+      navigator.mediaDevices?.getUserMedia,
+  );
+}
+
+function getAudioDurationMs(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const media = file.type.startsWith("video/")
+      ? document.createElement("video")
+      : document.createElement("audio");
+    const objectUrl = URL.createObjectURL(file);
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error("No se ha podido leer la duración del archivo."));
+    }, 2500);
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      media.removeAttribute("src");
+      URL.revokeObjectURL(objectUrl);
+    };
+
+    media.preload = "metadata";
+    media.addEventListener(
+      "loadedmetadata",
+      () => {
+        const durationMs = Math.round(media.duration * 1000);
+        cleanup();
+
+        if (!Number.isFinite(durationMs) || durationMs <= 0) {
+          reject(new Error("No se ha podido leer la duración del archivo."));
+          return;
+        }
+
+        resolve(durationMs);
+      },
+      { once: true },
+    );
+    media.addEventListener(
+      "error",
+      () => {
+        cleanup();
+        reject(new Error("No se ha podido leer el archivo."));
+      },
+      { once: true },
+    );
+    media.src = objectUrl;
+  });
+}
 
 function createDeviceId(): string {
   return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -571,9 +669,21 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     useState<PendingMobileResultConfirmation | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [isSendingAudio, setIsSendingAudio] = useState(false);
   const [isSavingTeamName, setIsSavingTeamName] = useState(false);
   const [isSubmittingMobileResult, setIsSubmittingMobileResult] = useState(false);
   const previewObjectUrlRef = useRef<string | null>(null);
+  const audioFileInputRef = useRef<HTMLInputElement | null>(null);
+  const audioRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioStartedAtRef = useRef(0);
+  const audioTimeoutRef = useRef<number | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioHoldTimerRef = useRef<number | null>(null);
+  const audioHoldActiveRef = useRef(false);
+  const audioPointerDownRef = useRef(false);
+  const audioSuppressNextClickRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -773,6 +883,24 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     }
   }, [activeMobileTab, canShowAdminTab]);
 
+  useEffect(
+    () => () => {
+      if (audioHoldTimerRef.current) {
+        window.clearTimeout(audioHoldTimerRef.current);
+      }
+
+      if (audioTimeoutRef.current) {
+        window.clearTimeout(audioTimeoutRef.current);
+      }
+
+      if (audioRecorderRef.current?.state === "recording") {
+        audioRecorderRef.current.stop();
+      }
+      audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+    },
+    [],
+  );
+
   async function handleFileChange(file: File | null): Promise<void> {
     if (!file) {
       if (previewObjectUrlRef.current) {
@@ -874,10 +1002,10 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     }
   }
 
-  async function handleSendMessage(event: React.FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  async function sendChatMessage(text: string): Promise<void> {
+    const trimmedText = text.trim();
 
-    if (!deviceId || !chatInput.trim()) {
+    if (!deviceId || !trimmedText) {
       return;
     }
 
@@ -893,7 +1021,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           action: "postChatMessage",
           payload: {
             deviceId,
-            text: chatInput.trim(),
+            text: trimmedText,
           },
         }),
       });
@@ -910,6 +1038,210 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
     } finally {
       setIsSendingMessage(false);
     }
+  }
+
+  async function handleSendMessage(event: React.FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    await sendChatMessage(chatInput);
+  }
+
+  function releaseAudioRecorder(): void {
+    if (audioHoldTimerRef.current) {
+      window.clearTimeout(audioHoldTimerRef.current);
+      audioHoldTimerRef.current = null;
+    }
+
+    if (audioTimeoutRef.current) {
+      window.clearTimeout(audioTimeoutRef.current);
+      audioTimeoutRef.current = null;
+    }
+
+    audioStreamRef.current?.getTracks().forEach((track) => track.stop());
+    audioStreamRef.current = null;
+    audioRecorderRef.current = null;
+    audioChunksRef.current = [];
+    audioStartedAtRef.current = 0;
+    audioHoldActiveRef.current = false;
+    audioPointerDownRef.current = false;
+    setIsRecordingAudio(false);
+  }
+
+  async function sendAudioBlob(blob: Blob, durationMs: number): Promise<void> {
+    if (!deviceId || blob.size === 0) {
+      return;
+    }
+
+    setIsSendingAudio(true);
+
+    try {
+      const formData = new FormData();
+      const extension = getAudioFileExtension(blob.type);
+      formData.set("deviceId", deviceId);
+      formData.set("durationMs", String(Math.min(durationMs, MAX_CHAT_AUDIO_DURATION_MS)));
+      formData.set("file", blob, `audio-${Date.now()}.${extension}`);
+
+      const response = await fetch("/api/tournament/audio", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json()) as TournamentState | { error: string };
+
+      if (!response.ok || "error" in payload) {
+        throw new Error("error" in payload ? payload.error : "No se ha podido mandar el audio.");
+      }
+
+      setState(payload);
+    } catch (error) {
+      setFeedback((error as Error).message);
+    } finally {
+      setIsSendingAudio(false);
+    }
+  }
+
+  async function handleAudioFileFallback(file: File | null): Promise<void> {
+    if (!file) {
+      return;
+    }
+
+    if (!isAudioCarrierFile(file)) {
+      setFeedback("El archivo elegido no contiene audio.");
+      return;
+    }
+
+    try {
+      const durationMs = await getAudioDurationMs(file);
+
+      if (durationMs > MAX_CHAT_AUDIO_DURATION_MS + 500) {
+        setFeedback(`El audio debe durar ${MAX_CHAT_AUDIO_SECONDS} segundos o menos.`);
+        return;
+      }
+
+      await sendAudioBlob(file, durationMs);
+    } catch (error) {
+      setFeedback((error as Error).message);
+    }
+  }
+
+  async function handleStartAudioRecording(): Promise<void> {
+    if (!deviceId || audioRecorderRef.current || isSendingAudio) {
+      return;
+    }
+
+    if (!canUseInlineAudioRecorder()) {
+      audioFileInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getSupportedAudioMimeType();
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+      audioChunksRef.current = [];
+      audioStartedAtRef.current = Date.now();
+      audioStreamRef.current = stream;
+      audioRecorderRef.current = recorder;
+
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      });
+
+      recorder.addEventListener("stop", () => {
+        const durationMs = Date.now() - audioStartedAtRef.current;
+        const chunks = audioChunksRef.current;
+        const audioType = recorder.mimeType || mimeType || "audio/webm";
+        const blob = new Blob(chunks, { type: audioType });
+
+        releaseAudioRecorder();
+        void sendAudioBlob(blob, durationMs);
+      });
+
+      recorder.start(250);
+      setIsRecordingAudio(true);
+      audioTimeoutRef.current = window.setTimeout(() => {
+        if (audioRecorderRef.current?.state === "recording") {
+          audioRecorderRef.current.stop();
+        }
+      }, MAX_CHAT_AUDIO_DURATION_MS);
+    } catch (error) {
+      releaseAudioRecorder();
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "No se ha podido abrir el micrófono.",
+      );
+    }
+  }
+
+  function handleStopAudioRecording(): void {
+    if (audioRecorderRef.current?.state === "recording") {
+      audioRecorderRef.current.stop();
+    }
+  }
+
+  function clearAudioHoldTimer(): void {
+    if (audioHoldTimerRef.current) {
+      window.clearTimeout(audioHoldTimerRef.current);
+      audioHoldTimerRef.current = null;
+    }
+  }
+
+  function handleAudioPointerDown(event: React.PointerEvent<HTMLButtonElement>): void {
+    if (
+      event.button !== 0 ||
+      isSendingAudio ||
+      isSendingMessage ||
+      audioRecorderRef.current ||
+      !canUseInlineAudioRecorder()
+    ) {
+      return;
+    }
+
+    audioPointerDownRef.current = true;
+    audioHoldActiveRef.current = false;
+    clearAudioHoldTimer();
+
+    audioHoldTimerRef.current = window.setTimeout(() => {
+      audioHoldTimerRef.current = null;
+      audioHoldActiveRef.current = true;
+      audioSuppressNextClickRef.current = true;
+      void handleStartAudioRecording().then(() => {
+        if (!audioPointerDownRef.current) {
+          handleStopAudioRecording();
+        }
+      });
+    }, 260);
+  }
+
+  function handleAudioPointerUp(): void {
+    audioPointerDownRef.current = false;
+    clearAudioHoldTimer();
+
+    if (audioHoldActiveRef.current) {
+      audioHoldActiveRef.current = false;
+      handleStopAudioRecording();
+    }
+  }
+
+  function handleAudioButtonClick(): void {
+    if (audioSuppressNextClickRef.current) {
+      audioSuppressNextClickRef.current = false;
+      return;
+    }
+
+    if (audioRecorderRef.current?.state === "recording") {
+      handleStopAudioRecording();
+      return;
+    }
+
+    if (!canUseInlineAudioRecorder()) {
+      audioFileInputRef.current?.click();
+      return;
+    }
+
+    void handleStartAudioRecording();
   }
 
   async function handleSaveTeamName(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -1196,8 +1528,8 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           onChange={(event) => setAdminPassword(event.target.value)}
           placeholder="Contrasena admin"
           className="input-shell !bg-[var(--surface-inset)] !text-[var(--foreground)]"
-        />
-        <button
+                    />
+                    <button
           type="submit"
           disabled={isClaimingAdmin || !adminPassword}
           className="button-primary w-full"
@@ -2141,9 +2473,23 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                                 {formatTime(message.createdAt)}
                               </span>
                             </div>
-                            <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                              {message.text}
-                            </p>
+                            {message.type === "audio" && message.audioUrl ? (
+                              <div className="mt-2 space-y-2">
+                                <p className="text-sm font-semibold leading-6 text-[var(--foreground)]">
+                                  Audio · {Math.ceil((message.audioDurationMs ?? 0) / 1000)}s
+                                </p>
+                                <video
+                                  controls
+                                  playsInline
+                                  src={message.audioUrl}
+                                  className="max-h-24 w-full rounded-[8px]"
+                                />
+                              </div>
+                            ) : (
+                              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                                {message.text}
+                              </p>
+                            )}
                           </div>
                         );
                       })
@@ -2154,11 +2500,56 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                     )}
                   </div>
 
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {QUICK_CHAT_REACTIONS.map((reaction) => (
+                      <button
+                        key={reaction}
+                        type="button"
+                        onClick={() => void sendChatMessage(reaction)}
+                        disabled={isSendingMessage}
+                        className="rounded-full border border-[var(--stroke)] bg-[var(--surface-inset)] px-3 py-2 text-sm font-semibold text-[var(--foreground)] transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] disabled:opacity-50"
+                      >
+                        {reaction}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onPointerDown={handleAudioPointerDown}
+                      onPointerUp={handleAudioPointerUp}
+                      onPointerCancel={handleAudioPointerUp}
+                      onPointerLeave={handleAudioPointerUp}
+                      onClick={handleAudioButtonClick}
+                      disabled={isSendingAudio || isSendingMessage}
+                      className={`touch-none select-none rounded-full border px-3 py-2 text-sm font-semibold transition disabled:opacity-50 ${
+                        isRecordingAudio
+                          ? "border-rose-300/60 bg-rose-500/16 text-rose-100"
+                          : "border-[var(--accent-border)] bg-[var(--accent-soft)] text-[var(--foreground)] hover:bg-[rgba(124,255,79,0.18)]"
+                      }`}
+                    >
+                      {isRecordingAudio
+                        ? "Grabando · soltar/parar"
+                        : isSendingAudio
+                          ? "Enviando audio"
+                          : `Audio ${MAX_CHAT_AUDIO_SECONDS}s`}
+                    </button>
+                    <input
+                      ref={audioFileInputRef}
+                      type="file"
+                      accept="audio/*,.m4a,.mp3,.wav,.ogg,.webm"
+                      onChange={(event) => {
+                        void handleAudioFileFallback(event.target.files?.[0] ?? null);
+                        event.currentTarget.value = "";
+                      }}
+                      className="hidden"
+                    />
+                  </div>
+
                   <form className="mt-4 flex gap-3" onSubmit={(event) => void handleSendMessage(event)}>
                     <input
                       value={chatInput}
                       onChange={(event) => setChatInput(event.target.value)}
-                      placeholder="Escribe al resto de jugadores"
+                      maxLength={MAX_CHAT_REACTION_CHARACTERS}
+                      placeholder="Texto corto o emoji"
                       className="input-shell !bg-[var(--surface-inset)] !text-[var(--foreground)] placeholder:!text-[var(--muted-soft)]"
                     />
                     <button

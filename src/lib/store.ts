@@ -125,8 +125,24 @@ function getExtensionForMimeType(mimeType: string): string {
     case "image/heic":
     case "image/heif":
       return ".heic";
+    case "audio/webm":
+      return ".webm";
+    case "audio/mp4":
+    case "audio/x-m4a":
+      return ".m4a";
+    case "audio/ogg":
+      return ".ogg";
+    case "audio/wav":
+    case "audio/wave":
+      return ".wav";
+    case "video/mp4":
+      return ".mp4";
+    case "video/quicktime":
+      return ".mov";
+    case "video/webm":
+      return ".webm";
     default:
-      return ".jpg";
+      return mimeType.startsWith("audio/") ? ".webm" : ".jpg";
   }
 }
 
@@ -143,6 +159,31 @@ export async function saveParticipantPhoto(
   participantOrDeviceId: string,
 ): Promise<string> {
   return saveUploadedPhoto(file, participantOrDeviceId);
+}
+
+export async function saveChatAudio(
+  file: File,
+  participantOrDeviceId: string,
+): Promise<string> {
+  if (!file.type.startsWith("audio/") && !file.type.startsWith("video/")) {
+    throw new Error("Solo se permiten audios o vídeos cortos con audio.");
+  }
+
+  await ensureStorage();
+
+  const extension = getExtensionForMimeType(file.type);
+  const safePrefix = participantOrDeviceId.replace(/[^a-zA-Z0-9-_]/g, "-");
+  const fileName = `${safePrefix}-audio-${Date.now()}${extension}`;
+  const filePath = path.join(UPLOADS_DIR, fileName);
+  const bytes = Buffer.from(await file.arrayBuffer());
+
+  if (bytes.byteLength > 25_000_000) {
+    throw new Error("El audio es demasiado grande.");
+  }
+
+  await writeFile(filePath, bytes);
+
+  return fileName;
 }
 
 async function saveUploadedPhoto(file: File, prefix: string): Promise<string> {
@@ -183,6 +224,18 @@ export function getContentTypeForPath(filePath: string): string {
       return "image/webp";
     case ".heic":
       return "image/heic";
+    case ".webm":
+      return "audio/webm";
+    case ".m4a":
+      return "audio/mp4";
+    case ".mp4":
+      return "video/mp4";
+    case ".mov":
+      return "video/quicktime";
+    case ".ogg":
+      return "audio/ogg";
+    case ".wav":
+      return "audio/wav";
     case ".jpg":
     case ".jpeg":
     default:

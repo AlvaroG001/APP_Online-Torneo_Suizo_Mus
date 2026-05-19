@@ -19,6 +19,7 @@ import {
   type RefObject,
 } from "react";
 import type {
+  ChatMessage,
   Match,
   MatchScore,
   LeagueFinalTier,
@@ -29,6 +30,7 @@ import type {
   TournamentState,
 } from "@/lib/tournament";
 import {
+  MAX_CHAT_REACTION_CHARACTERS,
   TOP_CUT,
   advanceTournament,
   forceSemifinalsFromCurrentStandings,
@@ -142,6 +144,15 @@ interface PhaseTransitionRevealState {
   mode: PhaseTransitionRevealMode;
   teams: Team[];
   nextAction?: "advance" | "forceSemifinals" | "forceLeagueFinals" | "none";
+}
+
+interface ChatReactionBurst {
+  id: string;
+  text: string;
+  authorName: string;
+  createdAt: string;
+  audioUrl?: string;
+  audioDurationMs?: number;
 }
 
 interface CelebrationAudioController {
@@ -1328,6 +1339,57 @@ function seededRatio(seed: string, index: number): number {
   return (hash >>> 0) / 4294967295;
 }
 
+function isTournamentDisplayStage(stage: TournamentState["stage"]): boolean {
+  return (
+    stage === "swiss" ||
+    stage === "league" ||
+    stage === "semifinals" ||
+    stage === "final" ||
+    stage === "leagueSemifinals" ||
+    stage === "leagueFinals"
+  );
+}
+
+function ChatReactionLayer({ reactions }: { reactions: ChatReactionBurst[] }) {
+  if (reactions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="chat-reaction-layer" aria-live="polite">
+      {reactions.map((reaction, index) => {
+        const x = Math.round(8 + seededRatio(reaction.id, 11) * 74);
+        const y = Math.round(14 + seededRatio(reaction.id, 23) * 52);
+        const drift = Math.round((seededRatio(reaction.id, 41) - 0.5) * 30);
+        const scale = 0.92 + seededRatio(reaction.id, 53) * 0.36;
+        const rotate = Math.round((seededRatio(reaction.id, 67) - 0.5) * 14);
+
+        return (
+          <div
+            key={reaction.id}
+            className="chat-reaction-burst"
+            style={
+              {
+                "--reaction-x": `${x}vw`,
+                "--reaction-y": `${y}vh`,
+                "--reaction-drift": `${drift}vw`,
+                "--reaction-scale": scale,
+                "--reaction-rotate": `${rotate}deg`,
+                "--reaction-delay": `${Math.min(index, 3) * 0.12}s`,
+              } as CSSProperties
+            }
+          >
+            <span className="chat-reaction-burst__text">
+              {reaction.audioUrl ? "🎙️ Audio" : reaction.text}
+            </span>
+            <span className="chat-reaction-burst__author">{reaction.authorName}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ConfettiBurst({ seed, intensity = "regular" }: { seed: string; intensity?: "regular" | "final" }) {
   const count = intensity === "final" ? 110 : 72;
 
@@ -1769,14 +1831,19 @@ function ChampionCelebrationOverlay({
 
 function CelebrationAudioToggle({
   audio,
+  pendingChatAudioCount = 0,
+  onPlayPendingChatAudio,
 }: {
   audio: CelebrationAudioController;
+  pendingChatAudioCount?: number;
+  onPlayPendingChatAudio?: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={() => {
         audio.unlock();
+        onPlayPendingChatAudio?.();
         if (audio.unlocked || audio.muted) {
           audio.toggleMuted();
         }
@@ -1785,7 +1852,31 @@ function CelebrationAudioToggle({
       aria-pressed={!audio.muted}
       title={audio.muted ? "Activar sonido de celebraciones" : "Silenciar celebraciones"}
     >
-      {audio.muted ? "Sonido off" : audio.unlocked ? "Sonido on" : "Activar sonido"}
+      {pendingChatAudioCount > 0
+        ? `Audio pendiente (${pendingChatAudioCount})`
+        : audio.muted
+          ? "Sonido off"
+          : audio.unlocked
+            ? "Sonido on"
+            : "Activar sonido"}
+    </button>
+  );
+}
+
+function ChatAudioUnlockPrompt({
+  pendingCount,
+  onPlay,
+}: {
+  pendingCount: number;
+  onPlay: () => void;
+}) {
+  if (pendingCount === 0) {
+    return null;
+  }
+
+  return (
+    <button type="button" className="chat-audio-unlock" onClick={onPlay}>
+      Reproducir audio · {pendingCount}
     </button>
   );
 }
@@ -5093,11 +5184,16 @@ export function TournamentFlow({
   const [topCutReveal, setTopCutReveal] = useState<TopCutRevealState | null>(null);
   const [phaseTransitionReveal, setPhaseTransitionReveal] =
     useState<PhaseTransitionRevealState | null>(null);
+  const [chatReactionBursts, setChatReactionBursts] = useState<ChatReactionBurst[]>([]);
+  const [blockedChatAudioReactions, setBlockedChatAudioReactions] = useState<ChatReactionBurst[]>([]);
   const [isPending, startTransition] = useTransition();
   const audio = useCelebrationAudio();
   const previousStateRef = useRef<TournamentState | null>(null);
   const latestStateRef = useRef<TournamentState>(initialState);
   const seenCelebrationIdsRef = useRef<Set<string> | null>(null);
+  const seenChatMessageIdsRef = useRef<Set<string> | null>(null);
+  const playedChatAudioIdsRef = useRef<Set<string>>(new Set());
+  const blockedChatAudioReactionsRef = useRef<ChatReactionBurst[]>([]);
   const activeCelebrationRef = useRef<CelebrationEvent | null>(null);
   const celebrationQueueRef = useRef<CelebrationEvent[]>([]);
   const applyTournamentStateRef = useRef<(nextState: TournamentState) => void>(() => undefined);
@@ -5138,6 +5234,7 @@ export function TournamentFlow({
         seenIds.add(id);
       }
       seenCelebrationIdsRef.current = seenIds;
+      seenChatMessageIdsRef.current = new Set(initialState.chatMessages.map((message) => message.id));
       previousStateRef.current = initialState;
       latestStateRef.current = initialState;
       writeSeenCelebrationIds(seenIds);
@@ -5151,6 +5248,10 @@ export function TournamentFlow({
   useEffect(() => {
     celebrationQueueRef.current = celebrationQueue;
   }, [celebrationQueue]);
+
+  useEffect(() => {
+    blockedChatAudioReactionsRef.current = blockedChatAudioReactions;
+  }, [blockedChatAudioReactions]);
 
   useEffect(() => {
     const unlockAudio = (): void => {
@@ -5301,6 +5402,111 @@ export function TournamentFlow({
     return projectedTeams;
   }
 
+  function buildChatReactionBurst(
+    message: ChatMessage,
+    sourceState: TournamentState,
+  ): ChatReactionBurst {
+    const author = sourceState.participants.find((entry) => entry.id === message.participantId);
+    const text = Array.from(message.text).slice(0, MAX_CHAT_REACTION_CHARACTERS).join("");
+
+    return {
+      id: message.id,
+      text: message.type === "audio" ? "Audio" : text,
+      authorName: author?.name ?? "Jugador",
+      createdAt: message.createdAt,
+      audioUrl: message.type === "audio" ? message.audioUrl : undefined,
+      audioDurationMs: message.type === "audio" ? message.audioDurationMs : undefined,
+    };
+  }
+
+  async function playChatAudioReaction(
+    reaction: ChatReactionBurst,
+    force = false,
+  ): Promise<void> {
+    if (!reaction.audioUrl || (!force && playedChatAudioIdsRef.current.has(reaction.id))) {
+      return;
+    }
+
+    let mediaElement: HTMLVideoElement | null = null;
+
+    try {
+      mediaElement = document.createElement("video");
+      mediaElement.src = reaction.audioUrl;
+      mediaElement.volume = 1;
+      mediaElement.playsInline = true;
+      mediaElement.preload = "auto";
+      mediaElement.className = "chat-audio-playback";
+      mediaElement.setAttribute("aria-hidden", "true");
+      document.body.append(mediaElement);
+      const activeMediaElement = mediaElement;
+      activeMediaElement.addEventListener("ended", () => activeMediaElement.remove(), { once: true });
+      activeMediaElement.addEventListener("error", () => activeMediaElement.remove(), { once: true });
+      await mediaElement.play();
+      playedChatAudioIdsRef.current.add(reaction.id);
+      setBlockedChatAudioReactions((current) =>
+        current.filter((entry) => entry.id !== reaction.id),
+      );
+    } catch {
+      mediaElement?.remove();
+      setBlockedChatAudioReactions((current) =>
+        current.some((entry) => entry.id === reaction.id)
+          ? current
+          : [...current, reaction].slice(-4),
+      );
+      // El navegador puede bloquear audio hasta que la pantalla haya recibido interacción.
+    }
+  }
+
+  function replayBlockedChatAudioReactions(): void {
+    const pendingAudioReactions = blockedChatAudioReactionsRef.current;
+
+    if (pendingAudioReactions.length === 0) {
+      return;
+    }
+
+    setBlockedChatAudioReactions([]);
+    for (const reaction of pendingAudioReactions) {
+      void playChatAudioReaction(reaction, true);
+    }
+  }
+
+  function queueChatReactions(nextState: TournamentState): void {
+    const seenChatIds =
+      seenChatMessageIdsRef.current ??
+      new Set(latestStateRef.current.chatMessages.map((message) => message.id));
+    seenChatMessageIdsRef.current = seenChatIds;
+
+    const nextReactions = nextState.chatMessages
+      .filter((message) => {
+        if (seenChatIds.has(message.id)) {
+          return false;
+        }
+
+        seenChatIds.add(message.id);
+        return isTournamentDisplayStage(nextState.stage);
+      })
+      .slice(-4)
+      .map((message) => buildChatReactionBurst(message, nextState));
+
+    if (nextReactions.length === 0) {
+      return;
+    }
+
+    setChatReactionBursts((current) => [...current, ...nextReactions].slice(-8));
+
+    for (const reaction of nextReactions) {
+      void playChatAudioReaction(reaction);
+    }
+
+    for (const reaction of nextReactions) {
+      window.setTimeout(() => {
+        setChatReactionBursts((current) =>
+          current.filter((entry) => entry.id !== reaction.id),
+        );
+      }, 6200);
+    }
+  }
+
   function applyTournamentState(nextState: TournamentState): void {
     const previousState = latestStateRef.current;
     const seenIds = seenCelebrationIdsRef.current ?? readSeenCelebrationIds();
@@ -5308,6 +5514,7 @@ export function TournamentFlow({
 
     const events = getNewCelebrationEvents(previousState, nextState, seenIds);
     startCelebrationEvents(events);
+    queueChatReactions(nextState);
 
     setForcedScreen((current) => {
       if (nextState.stage === "swiss") {
@@ -6085,7 +6292,16 @@ export function TournamentFlow({
   }, [existingStateDetail, hasExistingProgress, state.stage]);
   const celebrationLayer = (
     <>
-      <CelebrationAudioToggle audio={audio} />
+      <CelebrationAudioToggle
+        audio={audio}
+        pendingChatAudioCount={blockedChatAudioReactions.length}
+        onPlayPendingChatAudio={replayBlockedChatAudioReactions}
+      />
+      <ChatAudioUnlockPrompt
+        pendingCount={blockedChatAudioReactions.length}
+        onPlay={replayBlockedChatAudioReactions}
+      />
+      <ChatReactionLayer reactions={chatReactionBursts} />
       {activeCelebration?.kind === "matchClosed" ? (
         <MatchCelebrationOverlay
           event={activeCelebration}
