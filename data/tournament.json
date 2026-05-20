@@ -1,16 +1,16 @@
 {
   "config": {
     "title": "Riañcimo",
-    "teamCount": 20,
+    "teamCount": 10,
     "vacasPerMatch": 1,
     "gamesPerVaca": 1,
     "targetPoints": 30,
-    "publicBaseUrl": "http://192.168.1.70:3000",
+    "publicBaseUrl": "http://192.168.1.17:3000",
     "format": "league",
     "leagueLoserBonusEnabled": true
   },
   "stage": "setup",
-  "swissRoundsPlanned": 19,
+  "swissRoundsPlanned": 9,
   "currentSwissRound": 0,
   "topCut": 0,
   "adminDeviceId": null,
@@ -18,6 +18,9 @@
   "teams": [],
   "matches": [],
   "chatMessages": [],
+  "rankingTieBreaks": [],
+  "activeRankingTieBreak": null,
+  "activeRankingTieBreaks": [],
   "teamCreationMode": "pending",
   "championTeamId": null,
   "runnerUpTeamId": null,
@@ -35,6 +38,6 @@
       "runnerUpTeamId": null
     }
   },
-  "createdAt": "2026-05-19T19:10:50.529Z",
-  "updatedAt": "2026-05-19T19:10:50.529Z"
+  "createdAt": "2026-05-20T18:14:31.150Z",
+  "updatedAt": "2026-05-20T18:14:31.150Z"
 }

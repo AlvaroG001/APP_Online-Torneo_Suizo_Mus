@@ -17,6 +17,7 @@ import {
   MAX_CHAT_AUDIO_SECONDS,
   MAX_CHAT_REACTION_CHARACTERS,
   canDeviceSubmitTeamResult,
+  getLeagueFinalTierForRank,
   getMatchMobileResultConflict,
   getRankedTeams,
   getTournamentStructure,
@@ -485,16 +486,18 @@ function MobileTeamFaces({ team }: { team: Team }) {
   );
 }
 
-function getMobileStandingsBandClass(rank: number): string {
-  if (rank <= 4) {
+function getMobileStandingsBandClass(rank: number, teamCount: number): string {
+  const tier = getLeagueFinalTierForRank(rank, teamCount);
+
+  if (tier === "champions") {
     return "border-[var(--accent-border)] bg-[rgba(124,255,79,0.14)]";
   }
 
-  if (rank <= 8) {
+  if (tier === "europa") {
     return "border-sky-300/30 bg-sky-400/10";
   }
 
-  if (rank <= 12) {
+  if (tier === "conference") {
     return "border-amber-300/28 bg-amber-300/9";
   }
 
@@ -528,7 +531,11 @@ function MobileStandingsPanel({ state }: { state: TournamentState }) {
           return (
             <article
               key={`${entry.id}-mobile-standings`}
-              className={`rounded-[8px] border px-3 py-3 ${getMobileStandingsBandClass(rank)}`}
+              className={`rounded-[8px] border px-3 py-3 ${
+                isLeague
+                  ? getMobileStandingsBandClass(rank, state.config.teamCount)
+                  : "border-[var(--stroke)] bg-[var(--surface-strong)]"
+              }`}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
@@ -659,6 +666,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const [isClaimingAdmin, setIsClaimingAdmin] = useState(false);
   const [isAdminActionPending, setIsAdminActionPending] = useState(false);
   const [adminParticipantNames, setAdminParticipantNames] = useState<Record<string, string>>({});
+  const [adminTeamNames, setAdminTeamNames] = useState<Record<string, string>>({});
   const [adminMatchEditor, setAdminMatchEditor] = useState<AdminMatchEditor | null>(null);
   const [adminResultDrafts, setAdminResultDrafts] = useState<Record<string, MobileResultDraft>>({});
   const [chatInput, setChatInput] = useState("");
@@ -856,6 +864,21 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
   const adminActiveDraft = adminActiveMatch
     ? adminResultDrafts[adminActiveMatch.id] ?? buildMobileResultDraft(adminActiveMatch, null)
     : null;
+  const adminPendingTieBreakTeamGroups = useMemo(() => {
+    const adminPendingTieBreaks =
+      state.activeRankingTieBreaks.length > 0
+        ? state.activeRankingTieBreaks
+        : state.activeRankingTieBreak
+          ? [state.activeRankingTieBreak]
+          : [];
+    const teamsById = new Map(state.teams.map((entry) => [entry.id, entry]));
+    return adminPendingTieBreaks.map((tieBreak) => ({
+      tieBreak,
+      teams: tieBreak.candidateTeamIds
+        .map((teamId) => teamsById.get(teamId) ?? null)
+        .filter((entry): entry is Team => Boolean(entry)),
+    }));
+  }, [state.activeRankingTieBreak, state.activeRankingTieBreaks, state.teams]);
   const assignedAdminParticipantIds = useMemo(
     () =>
       new Set(
@@ -1665,6 +1688,65 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
           {state.teams.length > 0 ? (
             <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                Nombres de equipos
+              </p>
+              <div className="mt-3 space-y-2">
+                {state.teams.map((entry) => {
+                  const adminTeamName = adminTeamNames[entry.id] ?? entry.name;
+
+                  return (
+                    <div
+                      key={`${entry.id}-admin-name`}
+                      className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.42)] p-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <MobileTeamFaces team={entry} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-[var(--foreground)]">
+                            {entry.label}
+                          </p>
+                          <p className="truncate text-xs text-[var(--muted-soft)]">
+                            {entry.players.map((player) => player.name || "Plaza libre").join(" + ")}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                        <input
+                          value={adminTeamName}
+                          onChange={(event) =>
+                            setAdminTeamNames((current) => ({
+                              ...current,
+                              [entry.id]: event.target.value,
+                            }))
+                          }
+                          placeholder="Nombre del equipo"
+                          className="input-shell !bg-[var(--surface-inset)] !py-2 !text-[var(--foreground)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void runAdminAction(
+                              "adminSetTeamCustomName",
+                              {
+                                teamId: entry.id,
+                                name: adminTeamName.trim(),
+                              },
+                              "Nombre de equipo actualizado.",
+                            )
+                          }
+                          disabled={isAdminActionPending || !adminTeamName.trim()}
+                          className="button-secondary"
+                        >
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-5 border-t border-[var(--stroke)] pt-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
                 Parejas
               </p>
               <div className="mt-3 space-y-3">
@@ -1740,6 +1822,7 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
                   </div>
                 ))}
               </div>
+              </div>
             </section>
           ) : null}
         </>
@@ -1754,6 +1837,78 @@ export function MobileJoinForm({ initialState }: MobileJoinFormProps) {
         </section>
       ) : (
         <>
+          {adminPendingTieBreakTeamGroups.length > 0 ? (
+            <section className="rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
+                Desempates pendientes
+              </p>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                {adminPendingTieBreakTeamGroups.length} partida(s) de desempate activas.
+              </p>
+              <div className="mt-3 space-y-3">
+                {adminPendingTieBreakTeamGroups.map(({ tieBreak, teams }) => {
+                  const rankLabel =
+                    tieBreak.affectedRanks.length === 1
+                      ? `Top ${tieBreak.affectedRanks[0]}`
+                      : `Top ${tieBreak.affectedRanks[0]}-${tieBreak.affectedRanks.at(-1)}`;
+
+                  return (
+                    <div
+                      key={`${tieBreak.context}-${tieBreak.scoreKey}-${tieBreak.teamIds.join("-")}`}
+                      className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.26)] p-3"
+                    >
+                      <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">
+                        {rankLabel} · {tieBreak.metricsLabel}
+                      </p>
+                      <div className="space-y-2">
+                        {teams.map((entry, index) => (
+                          <div key={`${tieBreak.scoreKey}-${entry.id}-mobile-tie`}>
+                            {index > 0 ? (
+                              <div className="my-2 flex justify-center">
+                                <span className="inline-flex rounded-full border border-[var(--accent-border)] bg-[var(--background)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]">
+                                  VS
+                                </span>
+                              </div>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void runAdminAction(
+                                  "resolveRankingTieBreak",
+                                  {
+                                    context: tieBreak.context,
+                                    scoreKey: tieBreak.scoreKey,
+                                    teamIds: tieBreak.teamIds,
+                                    winnerTeamId: entry.id,
+                                  },
+                                  "Desempate guardado.",
+                                )
+                              }
+                              disabled={isAdminActionPending}
+                              className="w-full rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.42)] p-3 text-left"
+                            >
+                              <div className="flex items-center gap-3">
+                                <MobileTeamFaces team={entry} />
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-[var(--foreground)]">
+                                    {entry.name}
+                                  </p>
+                                  <p className="truncate text-xs text-[var(--muted-soft)]">
+                                    {entry.players.map((player) => player.name || "Plaza libre").join(" + ")}
+                                  </p>
+                                </div>
+                              </div>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                        </div>
+            </section>
+          ) : null}
+
           <section className="rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-4">
             <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent)]">
               Controles de fase

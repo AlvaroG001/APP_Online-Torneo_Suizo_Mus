@@ -30,6 +30,7 @@ export type PlayerSlot = "A" | "B";
 export type TeamResult = "W" | "L" | "BYE" | null;
 export type TeamCreationMode = "pending" | "random" | "manual";
 export type TournamentFormat = "swiss_only" | "swiss_top4" | "league";
+export type RankingTieBreakContext = "swissTopCut" | "leagueFinals";
 
 export interface LeagueFinalResult {
   championTeamId: string | null;
@@ -149,6 +150,25 @@ export interface ChatMessage {
   audioDurationMs?: number;
 }
 
+export interface RankingTieBreak {
+  id: string;
+  context: RankingTieBreakContext;
+  scoreKey: string;
+  teamIds: string[];
+  selectedTeamIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PendingRankingTieBreak {
+  context: RankingTieBreakContext;
+  scoreKey: string;
+  teamIds: string[];
+  candidateTeamIds: string[];
+  affectedRanks: number[];
+  metricsLabel: string;
+}
+
 export interface TournamentState {
   config: TournamentConfig;
   stage: TournamentStage;
@@ -160,6 +180,9 @@ export interface TournamentState {
   teams: Team[];
   matches: Match[];
   chatMessages: ChatMessage[];
+  rankingTieBreaks: RankingTieBreak[];
+  activeRankingTieBreak: PendingRankingTieBreak | null;
+  activeRankingTieBreaks: PendingRankingTieBreak[];
   teamCreationMode: TeamCreationMode;
   championTeamId: string | null;
   runnerUpTeamId: string | null;
@@ -233,6 +256,18 @@ export interface TeamNameUpdateInput {
   deviceId: string;
   teamId: string;
   name: string;
+}
+
+export interface AdminTeamNameUpdateInput {
+  teamId: string;
+  name: string;
+}
+
+export interface RankingTieBreakResolutionInput {
+  context: RankingTieBreakContext;
+  scoreKey: string;
+  teamIds: string[];
+  winnerTeamId: string;
 }
 
 export interface ParticipantNameUpdateInput {
@@ -480,6 +515,9 @@ export function createEmptyTournament(): TournamentState {
     teams: [],
     matches: [],
     chatMessages: [],
+    rankingTieBreaks: [],
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     teamCreationMode: "pending",
     championTeamId: null,
     runnerUpTeamId: null,
@@ -545,6 +583,9 @@ export function buildTournament(input: TournamentResetInput): TournamentState {
     teams: [],
     matches: [],
     chatMessages: [],
+    rankingTieBreaks: [],
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     teamCreationMode: "pending",
     championTeamId: null,
     runnerUpTeamId: null,
@@ -556,22 +597,27 @@ export function buildTournament(input: TournamentResetInput): TournamentState {
 
 function standingsComparator(a: Team, b: Team): number {
   return (
-    b.wins - a.wins ||
-    b.buchholz - a.buchholz ||
-    b.vacasWon - a.vacasWon ||
-    b.gamesWon - a.gamesWon ||
-    b.pointsWon - a.pointsWon ||
+    swissTopCutScoreComparator(a, b) ||
     a.seed - b.seed
   );
 }
 
-function leagueStandingsComparator(a: Team, b: Team): number {
+function swissTopCutScoreComparator(a: Team, b: Team): number {
+  return (
+    b.wins - a.wins ||
+    b.buchholz - a.buchholz ||
+    b.vacasWon - a.vacasWon ||
+    b.gamesWon - a.gamesWon ||
+    b.pointsWon - a.pointsWon
+  );
+}
+
+function leagueFinalsScoreComparator(a: Team, b: Team): number {
   return (
     b.leaguePoints - a.leaguePoints ||
     b.vacasWon - a.vacasWon ||
     b.gamesWon - a.gamesWon ||
-    b.pointsWon - a.pointsWon ||
-    a.seed - b.seed
+    b.pointsWon - a.pointsWon
   );
 }
 
@@ -587,16 +633,119 @@ function topCutPointsComparator(a: Team, b: Team): number {
   );
 }
 
-function provisionalTopCutComparator(a: Team, b: Team): number {
-  return b.wins - a.wins || b.pointsWon - a.pointsWon || a.seed - b.seed;
+function getRankingTieBreakScoreKey(
+  team: Team,
+  context: RankingTieBreakContext,
+): string {
+  if (context === "leagueFinals") {
+    return [
+      "league",
+      team.leaguePoints,
+      team.vacasWon,
+      team.gamesWon,
+      team.pointsWon,
+    ].join(":");
+  }
+
+  return [
+    "swiss",
+    team.wins,
+    team.buchholz,
+    team.vacasWon,
+    team.gamesWon,
+    team.pointsWon,
+  ].join(":");
 }
 
-function hasSameProvisionalTopCutScore(a: Team, b: Team): boolean {
-  return a.wins === b.wins && a.pointsWon === b.pointsWon;
+function getRankingTieBreakMetricsLabel(
+  team: Team,
+  context: RankingTieBreakContext,
+): string {
+  if (context === "leagueFinals") {
+    return `${team.leaguePoints} pts liga · ${team.vacasWon}V · ${team.gamesWon}J · ${team.pointsWon}P`;
+  }
+
+  return `${team.wins} victorias · Buchholz ${team.buchholz} · ${team.vacasWon}V · ${team.gamesWon}J · ${team.pointsWon}P`;
 }
 
-function pluralize(value: number, singular: string, plural: string): string {
-  return value === 1 ? singular : plural;
+function hasSameTeamSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const rightSet = new Set(right);
+  return left.every((teamId) => rightSet.has(teamId));
+}
+
+function findRankingTieBreak(
+  state: TournamentState,
+  context: RankingTieBreakContext,
+  scoreKey: string,
+  teamIds: string[],
+): RankingTieBreak | null {
+  return (
+    (state.rankingTieBreaks ?? []).find(
+      (entry) =>
+        entry.context === context &&
+        entry.scoreKey === scoreKey &&
+        hasSameTeamSet(entry.teamIds, teamIds),
+    ) ?? null
+  );
+}
+
+function getTieBreakSelectionIndex(
+  state: TournamentState,
+  context: RankingTieBreakContext,
+  team: Team,
+  opponent: Team,
+): number {
+  const scoreKey = getRankingTieBreakScoreKey(team, context);
+  const tieBreak = (state.rankingTieBreaks ?? []).find(
+    (entry) =>
+      entry.context === context &&
+      entry.scoreKey === scoreKey &&
+      entry.teamIds.includes(team.id) &&
+      entry.teamIds.includes(opponent.id),
+  );
+
+  if (!tieBreak) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  const selectedIndex = tieBreak.selectedTeamIds.indexOf(team.id);
+  return selectedIndex >= 0 ? selectedIndex : Number.MAX_SAFE_INTEGER;
+}
+
+function rankingTieBreakComparator(
+  state: TournamentState,
+  context: RankingTieBreakContext,
+) {
+  const scoreComparator =
+    context === "leagueFinals" ? leagueFinalsScoreComparator : swissTopCutScoreComparator;
+
+  return (a: Team, b: Team): number => {
+    const scoreResult = scoreComparator(a, b);
+    if (scoreResult !== 0) {
+      return scoreResult;
+    }
+
+    const aSelectionIndex = getTieBreakSelectionIndex(state, context, a, b);
+    const bSelectionIndex = getTieBreakSelectionIndex(state, context, b, a);
+
+    return aSelectionIndex - bSelectionIndex || a.seed - b.seed;
+  };
+}
+
+function getManualRankedTeams(
+  state: TournamentState,
+  context: RankingTieBreakContext,
+): Team[] {
+  const candidates =
+    context === "swissTopCut"
+      ? state.teams.filter((team) => team.status !== "eliminated")
+      : state.teams;
+
+  return [...candidates].sort(rankingTieBreakComparator(state, context));
 }
 
 function roundRecordComparator(a: string, b: string): number {
@@ -952,6 +1101,23 @@ function shouldCloseSwissPhase(state: TournamentState, teams: Team[]): boolean {
 }
 
 function cloneState(state: TournamentState): TournamentState {
+  const clonePendingTieBreak = (
+    entry: PendingRankingTieBreak,
+  ): PendingRankingTieBreak => ({
+    ...entry,
+    context: entry.context === "leagueFinals" ? "leagueFinals" : "swissTopCut",
+    teamIds: Array.isArray(entry.teamIds) ? [...entry.teamIds] : [],
+    candidateTeamIds: Array.isArray(entry.candidateTeamIds)
+      ? [...entry.candidateTeamIds]
+      : [],
+    affectedRanks: Array.isArray(entry.affectedRanks) ? [...entry.affectedRanks] : [],
+  });
+  const activeRankingTieBreaks = Array.isArray(state.activeRankingTieBreaks)
+    ? state.activeRankingTieBreaks.map(clonePendingTieBreak)
+    : state.activeRankingTieBreak
+      ? [clonePendingTieBreak(state.activeRankingTieBreak)]
+      : [];
+
   return {
     ...state,
     config: { ...state.config },
@@ -1008,6 +1174,18 @@ function cloneState(state: TournamentState): TournamentState {
         : undefined,
     })),
     chatMessages: state.chatMessages.map((message) => ({ ...message })),
+    rankingTieBreaks: Array.isArray(state.rankingTieBreaks)
+      ? state.rankingTieBreaks.map((entry) => ({
+          ...entry,
+          context: entry.context === "leagueFinals" ? "leagueFinals" : "swissTopCut",
+          teamIds: Array.isArray(entry.teamIds) ? [...entry.teamIds] : [],
+          selectedTeamIds: Array.isArray(entry.selectedTeamIds)
+            ? [...entry.selectedTeamIds]
+            : [],
+        }))
+      : [],
+    activeRankingTieBreak: activeRankingTieBreaks[0] ?? null,
+    activeRankingTieBreaks,
     leagueFinalResults: {
       ...createEmptyLeagueFinalResults(),
       ...(state.leagueFinalResults ?? {}),
@@ -1249,7 +1427,9 @@ export function refreshTournamentState(state: TournamentState): TournamentState 
   }
 
   const rankedTeams = [...baseTeams].sort(
-    cloned.config.format === "league" ? leagueStandingsComparator : standingsComparator,
+    cloned.config.format === "league"
+      ? rankingTieBreakComparator({ ...cloned, teams: baseTeams }, "leagueFinals")
+      : rankingTieBreakComparator({ ...cloned, teams: baseTeams }, "swissTopCut"),
   );
 
   for (const team of rankedTeams) {
@@ -1298,12 +1478,14 @@ export function refreshTournamentState(state: TournamentState): TournamentState 
 
 export function getRankedTeams(state: TournamentState): Team[] {
   return [...state.teams].sort(
-    state.config.format === "league" ? leagueStandingsComparator : standingsComparator,
+    state.config.format === "league"
+      ? rankingTieBreakComparator(state, "leagueFinals")
+      : rankingTieBreakComparator(state, "swissTopCut"),
   );
 }
 
 export function getLeagueRankedTeams(state: TournamentState): Team[] {
-  return [...state.teams].sort(leagueStandingsComparator);
+  return [...state.teams].sort(rankingTieBreakComparator(state, "leagueFinals"));
 }
 
 export function findParticipantByDeviceId(
@@ -1362,6 +1544,33 @@ export function setTeamCustomName(
     throw new Error(
       "El nombre del equipo solo puede decidirlo la plaza A desde su móvil, o la plaza B si A no tiene móvil real.",
     );
+  }
+
+  const name = input.name.trim();
+
+  if (!name) {
+    throw new Error("El nombre del equipo es obligatorio.");
+  }
+
+  team.name = name;
+  team.nameIsCustom = true;
+
+  return refreshTournamentState(cloned);
+}
+
+export function adminSetTeamCustomName(
+  state: TournamentState,
+  input: AdminTeamNameUpdateInput,
+): TournamentState {
+  if (state.stage !== "setup") {
+    throw new Error("Los nombres de equipo solo se pueden cambiar durante la preparación.");
+  }
+
+  const cloned = cloneState(state);
+  const team = cloned.teams.find((entry) => entry.id === input.teamId);
+
+  if (!team) {
+    throw new Error("No se ha encontrado el equipo indicado.");
   }
 
   const name = input.name.trim();
@@ -1787,6 +1996,9 @@ function createDirectFinal(state: TournamentState): TournamentState {
     stage: "final",
     currentSwissRound: 0,
     leagueFinalResults: createEmptyLeagueFinalResults(),
+    rankingTieBreaks: [],
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     matches: [finalMatch],
   });
 }
@@ -1817,6 +2029,9 @@ function createDirectSemifinals(state: TournamentState): TournamentState {
     stage: "semifinals",
     currentSwissRound: 0,
     leagueFinalResults: createEmptyLeagueFinalResults(),
+    rankingTieBreaks: [],
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     matches,
   });
 }
@@ -2260,6 +2475,9 @@ export function startTournament(state: TournamentState): TournamentState {
       championTeamId: null,
       runnerUpTeamId: null,
       leagueFinalResults: createEmptyLeagueFinalResults(),
+      rankingTieBreaks: [],
+      activeRankingTieBreak: null,
+      activeRankingTieBreaks: [],
       matches,
     });
   }
@@ -2270,6 +2488,9 @@ export function startTournament(state: TournamentState): TournamentState {
     ...refreshed,
     stage: "swiss",
     currentSwissRound: 1,
+    rankingTieBreaks: [],
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     matches,
   });
 }
@@ -2587,38 +2808,194 @@ function createSemifinals(state: TournamentState): TournamentState {
 }
 
 function getProvisionalTopCutTeams(state: TournamentState): Team[] {
-  const candidates = getRankedTeams(state)
-    .filter((team) => team.status !== "eliminated")
-    .sort(provisionalTopCutComparator);
+  const candidates = getManualRankedTeams(state, "swissTopCut").sort(
+    rankingTieBreakComparator(state, "swissTopCut"),
+  );
 
   if (candidates.length < TOP_CUT) {
     throw new Error("No hay al menos 4 parejas disponibles para pasar a semifinales.");
   }
 
-  for (let index = 0; index < TOP_CUT; index += 1) {
-    const current = candidates[index];
-    const next = candidates[index + 1];
+  return candidates.slice(0, TOP_CUT);
+}
 
-    if (!current || !next || !hasSameProvisionalTopCutScore(current, next)) {
-      continue;
-    }
-
-    const tiedTeams = candidates.filter((team) =>
-      hasSameProvisionalTopCutScore(team, current),
-    );
-    const tiedNames = tiedTeams.map((team) => team.name).join(", ");
-    const winsText = pluralize(current.wins, "victoria", "victorias");
-    const reason =
-      index === TOP_CUT - 1
-        ? "no se puede distinguir qué pareja ocupa el Top 4"
-        : `no se puede ordenar el Top ${index + 1} y el Top ${index + 2}`;
-
-    throw new Error(
-      `No se puede pasar a semifinales todavía: ${reason}. ${tiedNames} están empatados con ${current.wins} ${winsText} y ${current.pointsWon} puntos totales. Jugad otra ronda o cerrad más resultados para romper el empate.`,
-    );
+function getRelevantTieBreakMaxRank(
+  state: TournamentState,
+  context: RankingTieBreakContext,
+): number {
+  if (context === "swissTopCut") {
+    return state.config.format === "swiss_top4" ? TOP_CUT : 0;
   }
 
-  return candidates.slice(0, TOP_CUT);
+  const tiers = getEligibleLeagueFinalTiers(state.config.teamCount);
+
+  if (tiers.length === 0) {
+    return 0;
+  }
+
+  return Math.max(...tiers.map(({ startRank }) => startRank + TOP_CUT - 1));
+}
+
+function getPendingRankingTieBreaks(
+  state: TournamentState,
+  context: RankingTieBreakContext,
+): PendingRankingTieBreak[] {
+  const maxRelevantRank = getRelevantTieBreakMaxRank(state, context);
+
+  if (maxRelevantRank <= 0) {
+    return [];
+  }
+
+  const ranked = getManualRankedTeams(state, context);
+  const pendingTieBreaks: PendingRankingTieBreak[] = [];
+  let index = 0;
+
+  while (index < ranked.length) {
+    const firstTeam = ranked[index];
+    const scoreKey = getRankingTieBreakScoreKey(firstTeam, context);
+    const group = [firstTeam];
+    let nextIndex = index + 1;
+
+    while (
+      nextIndex < ranked.length &&
+      getRankingTieBreakScoreKey(ranked[nextIndex], context) === scoreKey
+    ) {
+      group.push(ranked[nextIndex]);
+      nextIndex += 1;
+    }
+
+    const startRank = index + 1;
+    const endRank = nextIndex;
+
+    if (group.length > 1 && startRank <= maxRelevantRank) {
+      const affectedRanks = Array.from(
+        { length: Math.min(endRank, maxRelevantRank) - startRank + 1 },
+        (_, rankOffset) => startRank + rankOffset,
+      );
+      const teamIds = group.map((team) => team.id);
+      const tieBreak = findRankingTieBreak(state, context, scoreKey, teamIds);
+      const selectedTeamIds =
+        tieBreak?.selectedTeamIds.filter((teamId) => teamIds.includes(teamId)) ?? [];
+      const requiredSelections = Math.min(group.length - 1, affectedRanks.length);
+
+      if (selectedTeamIds.length < requiredSelections) {
+        pendingTieBreaks.push({
+          context,
+          scoreKey,
+          teamIds,
+          candidateTeamIds: teamIds.filter((teamId) => !selectedTeamIds.includes(teamId)),
+          affectedRanks,
+          metricsLabel: getRankingTieBreakMetricsLabel(firstTeam, context),
+        });
+      }
+    }
+
+    index = nextIndex;
+  }
+
+  return pendingTieBreaks;
+}
+
+export function getPendingSemifinalTieBreaks(
+  state: TournamentState,
+  forcedContext?: RankingTieBreakContext,
+): PendingRankingTieBreak[] {
+  const refreshed = refreshTournamentState(state);
+
+  if (forcedContext) {
+    return getPendingRankingTieBreaks(refreshed, forcedContext);
+  }
+
+  if (refreshed.stage === "swiss") {
+    return getPendingRankingTieBreaks(refreshed, "swissTopCut");
+  }
+
+  if (refreshed.stage === "league") {
+    return getPendingRankingTieBreaks(refreshed, "leagueFinals");
+  }
+
+  return [];
+}
+
+export function getPendingSemifinalTieBreak(
+  state: TournamentState,
+  forcedContext?: RankingTieBreakContext,
+): PendingRankingTieBreak | null {
+  return getPendingSemifinalTieBreaks(state, forcedContext)[0] ?? null;
+}
+
+export function resolveRankingTieBreak(
+  state: TournamentState,
+  input: RankingTieBreakResolutionInput,
+): TournamentState {
+  const refreshed = refreshTournamentState(state);
+  const context: RankingTieBreakContext =
+    input.context === "leagueFinals" ? "leagueFinals" : "swissTopCut";
+  const teamIds = input.teamIds.filter(Boolean);
+  const pendingTieBreak = getPendingSemifinalTieBreaks(refreshed, context).find(
+    (entry) =>
+      entry.scoreKey === input.scoreKey &&
+      hasSameTeamSet(entry.teamIds, teamIds),
+  );
+
+  if (
+    !pendingTieBreak
+  ) {
+    throw new Error("Este desempate ya no está pendiente.");
+  }
+
+  if (!pendingTieBreak.candidateTeamIds.includes(input.winnerTeamId)) {
+    throw new Error("La pareja elegida no pertenece al desempate pendiente.");
+  }
+
+  const cloned = cloneState(refreshed);
+  const existingIndex = cloned.rankingTieBreaks.findIndex(
+    (entry) =>
+      entry.context === context &&
+      entry.scoreKey === input.scoreKey &&
+      hasSameTeamSet(entry.teamIds, teamIds),
+  );
+  const timestamp = nowIso();
+
+  if (existingIndex >= 0) {
+    const existing = cloned.rankingTieBreaks[existingIndex];
+    cloned.rankingTieBreaks[existingIndex] = {
+      ...existing,
+      selectedTeamIds: existing.selectedTeamIds.includes(input.winnerTeamId)
+        ? existing.selectedTeamIds
+        : [...existing.selectedTeamIds, input.winnerTeamId],
+      updatedAt: timestamp,
+    };
+  } else {
+    cloned.rankingTieBreaks.push({
+      id: randomUUID(),
+      context,
+      scoreKey: input.scoreKey,
+      teamIds,
+      selectedTeamIds: [input.winnerTeamId],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  const nextState = refreshTournamentState(cloned);
+  const nextPending = getPendingRankingTieBreaks(nextState, context);
+
+  return refreshTournamentState({
+    ...nextState,
+    activeRankingTieBreak: nextPending[0] ?? null,
+    activeRankingTieBreaks: nextPending,
+  });
+}
+
+export function clearActiveRankingTieBreak(state: TournamentState): TournamentState {
+  const refreshed = refreshTournamentState(state);
+
+  return refreshTournamentState({
+    ...refreshed,
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
+  });
 }
 
 export function forceSemifinalsFromCurrentStandings(state: TournamentState): TournamentState {
@@ -2630,6 +3007,16 @@ export function forceSemifinalsFromCurrentStandings(state: TournamentState): Tou
 
   if (refreshed.config.format !== "swiss_top4") {
     throw new Error("Este salto solo está disponible en formato Suizo + Top 4.");
+  }
+
+  const pendingTieBreaks = getPendingRankingTieBreaks(refreshed, "swissTopCut");
+
+  if (pendingTieBreaks.length > 0) {
+    return refreshTournamentState({
+      ...refreshed,
+      activeRankingTieBreak: pendingTieBreaks[0],
+      activeRankingTieBreaks: pendingTieBreaks,
+    });
   }
 
   const topFour = getProvisionalTopCutTeams(refreshed);
@@ -2666,6 +3053,8 @@ export function forceSemifinalsFromCurrentStandings(state: TournamentState): Tou
     championTeamId: null,
     runnerUpTeamId: null,
     leagueFinalResults: createEmptyLeagueFinalResults(),
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     matches: [
       ...swissMatchesWithoutPreviousQualifications,
       ...qualificationMarkers,
@@ -2706,6 +3095,25 @@ function getEligibleLeagueFinalTiers(teamCount: number): Array<{
   return tiers;
 }
 
+export function getLeagueFinalTierForRank(
+  rank: number,
+  teamCount: number,
+): LeagueFinalTier | null {
+  if (rank >= 1 && rank <= 4 && teamCount > 4) {
+    return "champions";
+  }
+
+  if (rank >= 5 && rank <= 8 && teamCount >= 8) {
+    return "europa";
+  }
+
+  if (rank >= 9 && rank <= 12 && teamCount >= 12) {
+    return "conference";
+  }
+
+  return null;
+}
+
 export function getLeagueFinalTierLabel(tier: LeagueFinalTier): string {
   return getLeagueTierLabel(tier);
 }
@@ -2725,6 +3133,16 @@ export function forceLeagueFinalsFromCurrentStandings(state: TournamentState): T
 
   if (tiers.length === 0) {
     throw new Error("Hace falta más de 4 parejas para jugar Champions League.");
+  }
+
+  const pendingTieBreaks = getPendingRankingTieBreaks(refreshed, "leagueFinals");
+
+  if (pendingTieBreaks.length > 0) {
+    return refreshTournamentState({
+      ...refreshed,
+      activeRankingTieBreak: pendingTieBreaks[0],
+      activeRankingTieBreaks: pendingTieBreaks,
+    });
   }
 
   const ranked = getLeagueRankedTeams(refreshed);
@@ -2775,6 +3193,8 @@ export function forceLeagueFinalsFromCurrentStandings(state: TournamentState): T
     championTeamId: null,
     runnerUpTeamId: null,
     leagueFinalResults: createEmptyLeagueFinalResults(),
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     matches: [
       ...refreshed.matches.filter(
         (match) => match.stage !== "leagueSemifinal" && match.stage !== "leagueFinal",
@@ -2866,6 +3286,8 @@ function finalizeLeagueTournament(state: TournamentState): TournamentState {
     championTeamId: leagueFinalResults.champions.championTeamId,
     runnerUpTeamId: leagueFinalResults.champions.runnerUpTeamId,
     leagueFinalResults,
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
   });
 }
 
@@ -2893,6 +3315,8 @@ function createFinal(state: TournamentState): TournamentState {
     stage: "final",
     matches: [...refreshed.matches, finalMatch],
     leagueFinalResults: createEmptyLeagueFinalResults(),
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
   });
 }
 
@@ -2909,6 +3333,8 @@ function finalizeTournament(state: TournamentState): TournamentState {
     stage: "completed",
     championTeamId: finalMatch.winnerId,
     runnerUpTeamId: finalMatch.loserId,
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
   });
 }
 
@@ -2922,6 +3348,8 @@ function finalizeSwissClassification(state: TournamentState): TournamentState {
     championTeamId: ranked[0]?.id ?? null,
     runnerUpTeamId: ranked[1]?.id ?? null,
     leagueFinalResults: createEmptyLeagueFinalResults(),
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
   });
 }
 
@@ -2989,7 +3417,11 @@ export function advanceTournament(state: TournamentState): TournamentState {
         return createSemifinals(finalProgressed);
       }
 
-      throw new Error("No quedan enfrentamientos suficientes para completar el top 4.");
+      if (progressedStructure.topCut > 0) {
+        return forceSemifinalsFromCurrentStandings(finalProgressed);
+      }
+
+      throw new Error("No quedan enfrentamientos suficientes para completar el torneo.");
     }
 
     return refreshTournamentState({
@@ -3070,6 +3502,9 @@ export function returnToSetupPreparation(state: TournamentState): TournamentStat
     championTeamId: null,
     runnerUpTeamId: null,
     leagueFinalResults: createEmptyLeagueFinalResults(),
+    rankingTieBreaks: [],
+    activeRankingTieBreak: null,
+    activeRankingTieBreaks: [],
     matches: [],
   });
 }

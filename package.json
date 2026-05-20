@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
+    "dev:tunnel": "node scripts/dev-tunnel.mjs",
     "dev:local": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",

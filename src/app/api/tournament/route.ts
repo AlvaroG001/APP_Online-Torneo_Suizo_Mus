@@ -6,10 +6,12 @@ import {
 } from "@/lib/store";
 import {
   addBotParticipant,
+  adminSetTeamCustomName,
   advanceTournament,
   assignParticipantToTeamSlot,
   buildTournament,
   claimMobileAdmin,
+  clearActiveRankingTieBreak,
   confirmManualTeam,
   createRandomTeams,
   deleteBotParticipantDuringSetup,
@@ -23,6 +25,7 @@ import {
   recordMatchResult,
   refreshTournamentState,
   returnToSetupPreparation,
+  resolveRankingTieBreak,
   revealLeagueRound,
   revealSwissGroup,
   setPublicBaseUrl,
@@ -45,6 +48,7 @@ const ADMIN_PROTECTED_ACTIONS = new Set([
   "forceSemifinalsFromCurrentStandings",
   "forceLeagueFinalsFromCurrentStandings",
   "revealLeagueRound",
+  "adminSetTeamCustomName",
 ]);
 
 function getAdminDeviceId(body: { adminDeviceId?: unknown; payload?: unknown }): string {
@@ -138,6 +142,18 @@ export async function POST(request: Request) {
             current,
             body.payload as Parameters<typeof setTeamCustomName>[1],
           );
+        case "adminSetTeamCustomName":
+          return adminSetTeamCustomName(
+            current,
+            body.payload as Parameters<typeof adminSetTeamCustomName>[1],
+          );
+        case "resolveRankingTieBreak":
+          return resolveRankingTieBreak(
+            current,
+            body.payload as Parameters<typeof resolveRankingTieBreak>[1],
+          );
+        case "clearActiveRankingTieBreak":
+          return clearActiveRankingTieBreak(current);
         case "revealSwissGroup":
           return revealSwissGroup(
             current,

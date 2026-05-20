@@ -8,6 +8,7 @@ import { TournamentWatermark } from "@/components/tournament-watermark";
 import {
   useEffect,
   useCallback,
+  Fragment,
   useMemo,
   useRef,
   useState,
@@ -23,6 +24,7 @@ import type {
   Match,
   MatchScore,
   LeagueFinalTier,
+  PendingRankingTieBreak,
   Participant,
   PlayerSlot,
   Team,
@@ -35,8 +37,10 @@ import {
   advanceTournament,
   forceSemifinalsFromCurrentStandings,
   getLeagueFinalTierLabel,
+  getLeagueFinalTierForRank,
   getLeagueRankedTeams,
   getMatchMobileResultConflict,
+  getPendingSemifinalTieBreaks,
   getTournamentStructure,
   isPointsOnlyMatchFormat,
   isTeamComplete,
@@ -110,6 +114,7 @@ type PhaseTransitionRevealMode =
   | "semifinalsToFinal"
   | "leagueToFinals"
   | "leagueSemifinalsToFinals";
+type TieBreakIntent = "advance" | "forceSemifinals" | "forceLeagueFinals";
 type ViewportProfile = {
   width: number;
   height: number;
@@ -856,6 +861,21 @@ function needsNetworkUrlRefresh(publicBaseUrl: string, networkBaseUrls: string[]
   }
 
   if (!suggestedNetworkUrl) {
+    return false;
+  }
+
+  const hostname = getBaseUrlHostname(normalizedBaseUrl);
+  return (
+    isLocalhostLike(normalizedBaseUrl) ||
+    (isPrivateIpv4(hostname) && !networkBaseUrls.includes(normalizedBaseUrl))
+  );
+}
+
+function shouldWarnAboutStaleNetworkUrl(publicBaseUrl: string, networkBaseUrls: string[]): boolean {
+  const normalizedBaseUrl = normalizeBaseUrlInput(publicBaseUrl);
+  const suggestedNetworkUrl = networkBaseUrls[0] ?? "";
+
+  if (!normalizedBaseUrl || !suggestedNetworkUrl) {
     return false;
   }
 
@@ -1777,6 +1797,107 @@ function PhaseTransitionOverlay({
   );
 }
 
+function RankingTieBreakOverlay({
+  tieBreaks,
+  state,
+  isPending,
+  onSelectWinner,
+  onClose,
+}: {
+  tieBreaks: PendingRankingTieBreak[];
+  state: TournamentState;
+  isPending: boolean;
+  onSelectWinner: (tieBreak: PendingRankingTieBreak, teamId: string) => void;
+  onClose: () => void;
+}) {
+  const teamsById = new Map(state.teams.map((team) => [team.id, team]));
+  const primaryTieBreak = tieBreaks[0];
+  const title =
+    primaryTieBreak?.context === "leagueFinals"
+      ? "Desempate para fases finales"
+      : "Desempate para semifinales";
+
+  return (
+    <div className="celebration-overlay celebration-overlay--phase" role="dialog" aria-modal="true">
+      <div className="celebration-card celebration-card--phase celebration-card--phase-semifinals">
+        <div className="celebration-card__header">
+          <p>{title}</p>
+          <span>{tieBreaks.length} desempate(s) exactos hasta puntos</span>
+        </div>
+
+        <p className="mx-auto mt-5 max-w-3xl text-center text-sm leading-6 text-[var(--muted)]">
+          Cada bloque puede jugarse a la vez. Cuando termine una partida de desempate, pincha la
+          pareja ganadora de ese bloque.
+        </p>
+
+        <div className="mt-7 max-h-[min(62vh,680px)] space-y-7 overflow-auto pr-1">
+          {tieBreaks.map((tieBreak) => {
+            const candidateTeams = tieBreak.candidateTeamIds
+              .map((teamId) => teamsById.get(teamId) ?? null)
+              .filter((team): team is Team => Boolean(team));
+            const rankLabel =
+              tieBreak.affectedRanks.length === 1
+                ? `Top ${tieBreak.affectedRanks[0]}`
+                : `Top ${tieBreak.affectedRanks[0]}-${tieBreak.affectedRanks.at(-1)}`;
+
+            return (
+              <section
+                key={`${tieBreak.context}-${tieBreak.scoreKey}-${tieBreak.teamIds.join("-")}`}
+                className="rounded-[8px] border border-[var(--stroke)] bg-[rgba(2,4,3,0.28)] p-4"
+              >
+                <div className="flex justify-center">
+                  <span className="rounded-full border border-[var(--accent-border)] bg-[var(--background)] px-7 py-3 font-mono text-xl font-black uppercase tracking-[0.24em] text-[var(--accent)] shadow-[0_18px_48px_rgba(124,255,79,0.14)]">
+                    {rankLabel}
+                  </span>
+                </div>
+
+                <div className="mt-6 flex flex-col items-center justify-center gap-4 lg:flex-row lg:gap-6">
+                  {candidateTeams.map((team, index) => (
+                    <Fragment key={`${tieBreak.scoreKey}-${team.id}`}>
+                      {index > 0 ? (
+                        <div className="flex min-w-16 justify-center">
+                          <span className="flex h-16 w-16 items-center justify-center rounded-full border border-[var(--accent-border)] bg-[var(--background)] font-mono text-lg font-black uppercase tracking-[0.16em] text-[var(--accent)] shadow-[0_20px_60px_rgba(0,0,0,0.28)]">
+                            VS
+                          </span>
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => onSelectWinner(tieBreak, team.id)}
+                        disabled={isPending}
+                        className="group w-full min-w-0 max-w-[420px] rounded-[8px] border border-[var(--stroke)] bg-[var(--surface-strong)] p-6 text-left transition hover:border-[var(--accent-border)] hover:bg-[var(--accent-soft)] disabled:cursor-wait disabled:opacity-60 lg:w-[360px] xl:w-[420px]"
+                      >
+                        <div className="flex items-center justify-center">
+                          <TeamFaces team={team} size="lg" />
+                        </div>
+                        <h3 className="mt-5 truncate text-center text-3xl font-black text-[var(--foreground)]">
+                          {team.name}
+                        </h3>
+                        <p className="mt-2 truncate text-center text-sm text-[var(--muted-soft)]">
+                          {playerName(team, 0)} · {playerName(team, 1)}
+                        </p>
+                        <p className="mt-5 text-center font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--accent)]">
+                          {tieBreak.metricsLabel}
+                        </p>
+                      </button>
+                    </Fragment>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+
+        <div className="mt-6 flex justify-center">
+          <button type="button" onClick={onClose} disabled={isPending} className="button-secondary">
+            Resolver más tarde
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChampionCelebrationOverlay({
   event,
   audio,
@@ -2066,9 +2187,8 @@ function PublicUrlScreen({
 }) {
   const suggestedNetworkUrl = networkBaseUrls[0] ?? "";
   const normalizedValue = normalizeBaseUrlInput(value);
-  const valueLooksStale =
-    Boolean(normalizedValue && suggestedNetworkUrl) &&
-    !networkBaseUrls.includes(normalizedValue);
+  const valueLooksStale = shouldWarnAboutStaleNetworkUrl(value, networkBaseUrls);
+  const isHttpsTournamentUrl = normalizedValue.startsWith("https://");
 
   return (
     <ScreenFrame
@@ -2091,7 +2211,7 @@ function PublicUrlScreen({
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
               URL base
             </p>
-            <InfoHint label="Usa la URL que abrirán los móviles: la dirección Network de Next si están en la misma Wi-Fi, o el dominio/túnel público si juegan desde fuera." />
+	            <InfoHint label="Para grabar audio directo desde móvil usa una URL HTTPS. Ejecuta npm run dev:tunnel y pega o usa la URL trycloudflare que aparece." />
           </div>
           <label className="mt-6 block">
             <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
@@ -2100,7 +2220,7 @@ function PublicUrlScreen({
             <input
               value={value}
               onChange={(event) => onChange(event.target.value)}
-              placeholder="http://192.168.1.41:3000"
+	              placeholder="https://tu-tunel.trycloudflare.com"
               className="input-shell mt-2"
             />
           </label>
@@ -2124,6 +2244,17 @@ function PublicUrlScreen({
               </button>
             ) : null}
           </div>
+
+          {isHttpsTournamentUrl ? (
+            <div className="mt-5 rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-3 text-sm leading-6 text-[var(--foreground)]">
+              URL HTTPS activa. Los móviles podrán usar el micrófono para audio directo.
+            </div>
+          ) : (
+            <div className="mt-5 rounded-[8px] border border-amber-400/24 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+              Para audio directo en móvil arranca con{" "}
+              <span className="font-mono">npm run dev:tunnel</span> y usa la URL HTTPS del túnel.
+            </div>
+          )}
 
           {valueLooksStale ? (
             <div className="mt-5 rounded-[8px] border border-amber-400/24 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
@@ -4376,16 +4507,18 @@ function SwissStageScreen({
   );
 }
 
-function getLeagueBandClass(rank: number): string {
-  if (rank <= 4) {
+function getLeagueBandClass(rank: number, teamCount: number): string {
+  const tier = getLeagueFinalTierForRank(rank, teamCount);
+
+  if (tier === "champions") {
     return "border-[var(--accent-border)] bg-[rgba(124,255,79,0.18)]";
   }
 
-  if (rank <= 8) {
+  if (tier === "europa") {
     return "border-sky-300/35 bg-sky-400/12";
   }
 
-  if (rank <= 12) {
+  if (tier === "conference") {
     return "border-amber-300/30 bg-amber-300/10";
   }
 
@@ -4543,7 +4676,7 @@ function LeagueStageScreen({
                 return (
                   <article
                     key={`${team.id}-league-standing`}
-                    className={`flex min-w-0 items-center justify-between gap-2 rounded-[8px] border px-2.5 py-2 ${getLeagueBandClass(rank)}`}
+                    className={`flex min-w-0 items-center justify-between gap-2 rounded-[8px] border px-2.5 py-2 ${getLeagueBandClass(rank, state.config.teamCount)}`}
                   >
                     <div className="flex min-w-0 items-center gap-2">
                       <span className="flex h-8 w-9 flex-none items-center justify-center rounded-[7px] bg-[rgba(2,4,3,0.42)] font-mono text-xs font-bold text-[var(--foreground)]">
@@ -5184,6 +5317,8 @@ export function TournamentFlow({
   const [topCutReveal, setTopCutReveal] = useState<TopCutRevealState | null>(null);
   const [phaseTransitionReveal, setPhaseTransitionReveal] =
     useState<PhaseTransitionRevealState | null>(null);
+  const [pendingTieBreaks, setPendingTieBreaks] = useState<PendingRankingTieBreak[]>([]);
+  const [pendingTieBreakIntent, setPendingTieBreakIntent] = useState<TieBreakIntent>("advance");
   const [chatReactionBursts, setChatReactionBursts] = useState<ChatReactionBurst[]>([]);
   const [blockedChatAudioReactions, setBlockedChatAudioReactions] = useState<ChatReactionBurst[]>([]);
   const [isPending, startTransition] = useTransition();
@@ -5203,11 +5338,20 @@ export function TournamentFlow({
     getBrowserOriginSnapshot,
     () => "",
   );
+  const visiblePendingTieBreaks =
+    pendingTieBreaks.length > 0
+      ? pendingTieBreaks
+      : state.activeRankingTieBreaks.length > 0
+        ? state.activeRankingTieBreaks
+        : state.activeRankingTieBreak
+          ? [state.activeRankingTieBreak]
+          : [];
   const celebrationLocked =
     Boolean(activeCelebration) ||
     celebrationQueue.length > 0 ||
     Boolean(topCutReveal) ||
-    Boolean(phaseTransitionReveal);
+    Boolean(phaseTransitionReveal) ||
+    visiblePendingTieBreaks.length > 0;
 
   const canUseCurrentOrigin = Boolean(browserOrigin) && !isLocalhostLike(browserOrigin);
   const needsPublicUrlGate = needsNetworkUrlRefresh(
@@ -5707,6 +5851,83 @@ export function TournamentFlow({
     });
   }
 
+  function openPendingTieBreaks(
+    intent: TieBreakIntent,
+    sourceState: TournamentState,
+  ): boolean {
+    const pending = getPendingSemifinalTieBreaks(sourceState);
+
+    if (pending.length === 0) {
+      return false;
+    }
+
+    setPendingTieBreaks(pending);
+    setPendingTieBreakIntent(intent);
+    setFeedback(null);
+    return true;
+  }
+
+  function continueAfterTieBreak(intent: TieBreakIntent): void {
+    if (intent === "forceSemifinals") {
+      executeForceSemifinalsFromCurrentStandings();
+      return;
+    }
+
+    if (intent === "forceLeagueFinals") {
+      executeForceLeagueFinalsFromCurrentStandings();
+      return;
+    }
+
+    executeAdvanceTournament();
+  }
+
+  function handleResolveRankingTieBreak(
+    activeTieBreak: PendingRankingTieBreak,
+    winnerTeamId: string,
+  ): void {
+    const shouldContinueAfterResolve = pendingTieBreaks.length > 0;
+    runMutation(
+      () =>
+        postAction({
+          action: "resolveRankingTieBreak",
+          payload: {
+            context: activeTieBreak.context,
+            scoreKey: activeTieBreak.scoreKey,
+            teamIds: activeTieBreak.teamIds,
+            winnerTeamId,
+          },
+        }),
+      "Desempate guardado.",
+      (nextState) => {
+        const nextPending = getPendingSemifinalTieBreaks(nextState, activeTieBreak.context);
+
+        if (nextPending.length > 0) {
+          setPendingTieBreaks(nextPending);
+          return;
+        }
+
+        const intent = pendingTieBreakIntent;
+        setPendingTieBreaks([]);
+        if (shouldContinueAfterResolve) {
+          continueAfterTieBreak(intent);
+        }
+      },
+    );
+  }
+
+  function handleCloseRankingTieBreak(): void {
+    setPendingTieBreaks([]);
+
+    if (!state.activeRankingTieBreak && state.activeRankingTieBreaks.length === 0) {
+      return;
+    }
+
+    runMutation(
+      () => postAction({ action: "clearActiveRankingTieBreak" }),
+      "Desempate aplazado.",
+    );
+  }
+
   function handleCreateTournament(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
 
@@ -5957,7 +6178,7 @@ export function TournamentFlow({
     if (
       state.stage === "swiss" &&
       structure.topCut > 0 &&
-      semifinalRevealItems.length >= structure.topCut
+      getCurrentSwissMatches(state).every((match) => match.status === "completed" || match.bye)
     ) {
       try {
         const projectedState = advanceTournament(state);
@@ -5977,7 +6198,14 @@ export function TournamentFlow({
           setFeedback(null);
           return;
         }
-      } catch {
+      } catch (error) {
+        if (
+          (error as Error).message.includes("desempate") &&
+          openPendingTieBreaks("advance", state)
+        ) {
+          return;
+        }
+
         if (explicitTopCutItems.length >= structure.topCut) {
           setPhaseTransitionReveal({
             mode: "swissToSemifinals",
@@ -5988,6 +6216,14 @@ export function TournamentFlow({
           return;
         }
       }
+    }
+
+    if (
+      state.stage === "league" &&
+      state.currentSwissRound >= state.swissRoundsPlanned &&
+      openPendingTieBreaks("advance", state)
+    ) {
+      return;
     }
 
     if (state.stage === "semifinals") {
@@ -6044,6 +6280,10 @@ export function TournamentFlow({
     let projectedSemifinalState: TournamentState;
 
     try {
+      if (openPendingTieBreaks("forceSemifinals", state)) {
+        return;
+      }
+
       projectedSemifinalState = forceSemifinalsFromCurrentStandings(state);
     } catch (error) {
       setFeedback({ tone: "error", text: (error as Error).message });
@@ -6082,6 +6322,10 @@ export function TournamentFlow({
         tone: "error",
         text: "Espera a que terminen las animaciones antes de cambiar de fase.",
       });
+      return;
+    }
+
+    if (openPendingTieBreaks("forceLeagueFinals", state)) {
       return;
     }
 
@@ -6328,6 +6572,15 @@ export function TournamentFlow({
           reveal={phaseTransitionReveal}
           audio={audio}
           onDone={handlePhaseTransitionDone}
+        />
+      ) : null}
+      {visiblePendingTieBreaks.length > 0 ? (
+        <RankingTieBreakOverlay
+          tieBreaks={visiblePendingTieBreaks}
+          state={state}
+          isPending={isPending}
+          onSelectWinner={handleResolveRankingTieBreak}
+          onClose={handleCloseRankingTieBreak}
         />
       ) : null}
     </>
